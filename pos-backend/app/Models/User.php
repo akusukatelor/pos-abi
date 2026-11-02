@@ -2,7 +2,6 @@
 
 namespace App\Models;
 
-// use Illuminate\Contracts\Auth\MustVerifyEmail;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -10,12 +9,17 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 
-#[Fillable(['name', 'email', 'password'])]
+// 1. TAMBAHKAN IMPORT INI DI ATAS
+use Laravel\Sanctum\HasApiTokens; 
+
+#[Fillable(['name', 'email', 'password', 'role'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
     /** @use HasFactory<UserFactory> */
-    use HasFactory, Notifiable;
+    
+    // 2. TAMBAHKAN HasApiTokens DI DALAM SINI
+    use HasApiTokens, HasFactory, Notifiable; 
 
     /**
      * Get the attributes that should be cast.
@@ -31,14 +35,12 @@ class User extends Authenticatable
     }
 
     public function transactions()
-{
-    // Satu User memiliki banyak Transaction
-    return $this->hasMany(Transaction::class);
-}
+    {
+        return $this->hasMany(Transaction::class);
+    }
 
-public function stockMovements()
-{
-    // Satu User mencatat banyak pergerakan stok
-    return $this->hasMany(StockMovement::class);
-}
+    public function stockMovements()
+    {
+        return $this->hasMany(StockMovement::class);
+    }
 }

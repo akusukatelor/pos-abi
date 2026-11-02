@@ -3,6 +3,8 @@
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 // Import Controller yang baru kita buat
+use App\Http\Controllers\Api\AuthController;
+use App\Http\Controllers\Api\UserController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\UnitController;
 use App\Http\Controllers\Api\SupplierController;
@@ -22,6 +24,10 @@ use App\Http\Controllers\Api\TransactionController;
 */
 
 // Rute Master Data (Sementara belum pakai otentikasi/login agar mudah ditesting)
+Route::post('login', [AuthController::class, 'login']);
+
+// Route Manajemen Akun (CRUD Kasir)
+Route::apiResource('users', UserController::class);
 Route::apiResource('categories', CategoryController::class);
 Route::apiResource('units', UnitController::class);
 Route::apiResource('suppliers', SupplierController::class);
