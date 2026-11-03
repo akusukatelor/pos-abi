@@ -121,6 +121,7 @@ function App() {
   const [productSearch, setProductSearch] = useState('')
   const [paymentMethod, setPaymentMethod] = useState('cash')
   const [chatInput, setChatInput] = useState('')
+  const [chatOpen, setChatOpen] = useState(true)
   const [chatMessages, setChatMessages] = useState([
     {
       role: 'assistant',
@@ -169,6 +170,18 @@ function App() {
   useEffect(() => {
     loadAllData()
   }, [])
+
+  useEffect(() => {
+    if (activeTab !== 'cashier') {
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      searchInputRef.current?.focus()
+    }, 120)
+
+    return () => window.clearTimeout(timer)
+  }, [activeTab])
 
   const filteredProducts = useMemo(() => {
     const keyword = productSearch.toLowerCase().trim()
@@ -248,6 +261,30 @@ function App() {
   }, [paymentMethod, payAmount, cart.length, totalCart])
 
   const isCashPaymentDisabled = paymentMethod === 'cash' && cart.length > 0 && Number(payAmount || 0) < totalCart
+  const isCheckoutDisabled = !cart.length || isCashPaymentDisabled
+
+  const paymentQrPattern = useMemo(
+    () =>
+      Array.from({ length: 144 }, (_, index) => {
+        const mod = index % 12
+        const row = Math.floor(index / 12)
+        const active =
+          ((mod + row) % 3 === 0) ||
+          (row > 2 && row < 8 && mod > 1 && mod < 10) ||
+          (row > 9 && row < 12 && mod % 2 === 0) ||
+          (row > 13 && row < 17 && mod % 3 !== 0)
+
+        return active
+      }),
+    [],
+  )
+
+  const paymentMethodLabel =
+    paymentMethod === 'transfer'
+      ? 'Transfer Bank'
+      : paymentMethod === 'ewallet'
+        ? 'E-Wallet'
+        : 'Tunai'
 
   const refresh = async () => {
     await loadAllData()
@@ -663,72 +700,135 @@ function App() {
   }
 
   const renderDashboard = () => (
-    <div className="page-grid">
-      <div className="stats-grid">
-        <div className="stat-card accent">
-          <span>Total Produk</span>
-          <strong>{dashboardStats.totalProducts}</strong>
+    <div className={chatOpen ? 'dashboard-shell dashboard-shell-chat' : 'dashboard-shell dashboard-shell-full'}>
+      <div className="dashboard-main-content">
+        <div className="stats-grid">
+          <div className="stat-card accent">
+            <span>Total Produk</span>
+            <strong>{dashboardStats.totalProducts}</strong>
+          </div>
+          <div className="stat-card info">
+            <span>Penjualan</span>
+            <strong>{currency.format(dashboardStats.totalSales)}</strong>
+          </div>
+          <div className="stat-card warning">
+            <span>Pengeluaran</span>
+            <strong>{currency.format(dashboardStats.totalExpense)}</strong>
+          </div>
+          <div className="stat-card danger">
+            <span>Stok Rendah</span>
+            <strong>{dashboardStats.lowStock}</strong>
+          </div>
         </div>
-        <div className="stat-card info">
-          <span>Penjualan</span>
-          <strong>{currency.format(dashboardStats.totalSales)}</strong>
-        </div>
-        <div className="stat-card warning">
-          <span>Pengeluaran</span>
-          <strong>{currency.format(dashboardStats.totalExpense)}</strong>
-        </div>
-        <div className="stat-card danger">
-          <span>Stok Rendah</span>
-          <strong>{dashboardStats.lowStock}</strong>
+
+        <div className="panel-grid">
+          <section className="panel">
+            <div className="panel-header">
+              <h3>Ringkasan Kinerja</h3>
+            </div>
+            <div className="mini-list">
+              <div>
+                <span>Open shift</span>
+                <strong>{dashboardStats.openShift}</strong>
+              </div>
+              <div>
+                <span>Transaksi hari ini</span>
+                <strong>{transactions.length}</strong>
+              </div>
+              <div>
+                <span>Data pelanggan</span>
+                <strong>{customers.length}</strong>
+              </div>
+              <div>
+                <span>Supplier aktif</span>
+                <strong>{suppliers.length}</strong>
+              </div>
+            </div>
+          </section>
+
+          <section className="panel">
+            <div className="panel-header">
+              <h3>Daftar Rekomendasi Belanja</h3>
+            </div>
+            <ul className="simple-list">
+              {restockRecommendations.length ? (
+                lowStockProducts.slice(0, 5).map((product) => (
+                  <li key={product.id}>
+                    <div className="stock-list-item">
+                      <span>{product.name}</span>
+                      <small>{product.stock} / {product.minimumStock ?? product.minimum_stock ?? 5} pcs</small>
+                    </div>
+                    <strong>+{product.recommendedQty ?? product.recommended_quantity ?? 1}</strong>
+                  </li>
+                ))
+              ) : (
+                <li className="muted">Belum ada rekomendasi restok saat ini.</li>
+              )}
+            </ul>
+          </section>
         </div>
       </div>
 
-      <div className="panel-grid">
-        <section className="panel">
-          <div className="panel-header">
-            <h3>Ringkasan Kinerja</h3>
-          </div>
-          <div className="mini-list">
-            <div>
-              <span>Open shift</span>
-              <strong>{dashboardStats.openShift}</strong>
+      {chatOpen ? (
+        <aside className="dashboard-chat-column">
+          <div className="ai-floating-widget dashboard-assistant-widget">
+            <div className="ai-widget-header">
+              <div className="ai-widget-title-wrap">
+                <div>
+                  <span className="ai-pill">AI</span>
+                  <strong>Asisten Virtual</strong>
+                </div>
+                <button
+                  type="button"
+                  className="chat-toggle-button"
+                  onClick={() => setChatOpen(false)}
+                  aria-label="Tutup chat bot"
+                >
+                  ×
+                </button>
+              </div>
             </div>
-            <div>
-              <span>Transaksi hari ini</span>
-              <strong>{transactions.length}</strong>
-            </div>
-            <div>
-              <span>Data pelanggan</span>
-              <strong>{customers.length}</strong>
-            </div>
-            <div>
-              <span>Supplier aktif</span>
-              <strong>{suppliers.length}</strong>
-            </div>
-          </div>
-        </section>
 
-        <section className="panel">
-          <div className="panel-header">
-            <h3>Daftar Rekomendasi Belanja</h3>
+            <div className="ai-message-list">
+              {chatMessages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
+                  {message.text}
+                </div>
+              ))}
+              {chatLoading && <div className="ai-message assistant">Memproses pertanyaan...</div>}
+            </div>
+
+            <div className="ai-input-row">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    askVirtualAssistant()
+                  }
+                }}
+                placeholder="Tanya stok atau rekomendasi beli..."
+              />
+              <button type="button" className="primary-button" onClick={askVirtualAssistant} disabled={chatLoading}>
+                Kirim
+              </button>
+            </div>
           </div>
-          <ul className="simple-list">
-            {restockRecommendations.length ? (
-              lowStockProducts.slice(0, 5).map((product) => (
-                <li key={product.id}>
-                  <div className="stock-list-item">
-                    <span>{product.name}</span>
-                    <small>{product.stock} / {product.minimumStock ?? product.minimum_stock ?? 5} pcs</small>
-                  </div>
-                  <strong>+{product.recommendedQty ?? product.recommended_quantity ?? 1}</strong>
-                </li>
-              ))
-            ) : (
-              <li className="muted">Belum ada rekomendasi restok saat ini.</li>
-            )}
-          </ul>
-        </section>
-      </div>
+        </aside>
+      ) : (
+        <aside className="dashboard-chat-column dashboard-chat-column-collapsed">
+          <button
+            type="button"
+            className="chat-open-button"
+            onClick={() => setChatOpen(true)}
+            aria-label="Buka chat bot"
+          >
+            <span>AI</span>
+            Buka Chat
+          </button>
+        </aside>
+      )}
     </div>
   )
 
@@ -1468,7 +1568,7 @@ function App() {
             type="button"
             className="primary-button"
             onClick={submitCheckout}
-            disabled={isCashPaymentDisabled || !cart.length}
+            disabled={isCheckoutDisabled}
           >
             Bayar
           </button>
@@ -1502,17 +1602,45 @@ function App() {
             min="0"
             value={payAmount}
             onChange={(event) => setPayAmount(event.target.value)}
-            placeholder="Uang bayar"
+            placeholder={paymentMethod === 'cash' ? 'Uang bayar' : 'Nominal pembayaran'}
           />
           <button
             type="button"
             className="primary-button pay-button"
             onClick={submitCheckout}
-            disabled={isCashPaymentDisabled || !cart.length}
+            disabled={isCheckoutDisabled}
           >
             Bayar
           </button>
         </div>
+
+        {paymentMethod !== 'cash' && (
+          <div className="payment-qr-panel" aria-live="polite">
+            <div className="payment-qr-header">
+              <span>{paymentMethodLabel}</span>
+              <strong>{currency.format(Number(payAmount || totalCart || 0))}</strong>
+            </div>
+            <div className="qr-box" aria-label="Kode QR pembayaran">
+              {paymentQrPattern.map((isActive, index) => (
+                <span
+                  key={index}
+                  className={isActive ? 'qr-cell active' : 'qr-cell'}
+                />
+              ))}
+            </div>
+            <div className="payment-qr-meta">
+              <div>
+                <small>Tujuan</small>
+                <strong>{paymentMethod === 'transfer' ? 'BCA 1234567890' : 'OVO / DANA / GOPAY 0812-3456-7890'}</strong>
+              </div>
+              <div>
+                <small>Catatan</small>
+                <span>Scan QR atau kirim ke nomor tujuan untuk konfirmasi otomatis.</span>
+              </div>
+            </div>
+          </div>
+        )}
+
         {cashPaymentError && <div className="payment-error">{cashPaymentError}</div>}
 
         <div className="product-grid">
@@ -1841,6 +1969,15 @@ function App() {
             </div>
             <button type="button" className="icon-button" aria-label="Notifications">⏺</button>
             <button type="button" className="icon-button" aria-label="Refresh" onClick={refresh}>↻</button>
+            <button
+              type="button"
+              className={chatOpen ? 'chat-toggle-inline active' : 'chat-toggle-inline'}
+              onClick={() => setChatOpen((current) => !current)}
+              aria-label={chatOpen ? 'Tutup chat bot' : 'Buka chat bot'}
+            >
+              <span className="chat-toggle-inline-icon">AI</span>
+              {chatOpen ? 'Chat' : 'Chat'}
+            </button>
             <div className="user-pill">
               <span className="user-avatar">SR</span>
               <div>
@@ -1863,42 +2000,6 @@ function App() {
         {!loading && activeTab === 'inventory' && renderInventory()}
         {!loading && activeTab === 'shift' && renderShift()}
 
-        {activeTab === 'dashboard' && (
-          <div className="ai-floating-widget">
-            <div className="ai-widget-header">
-              <div>
-                <span className="ai-pill">AI</span>
-                <strong>Asisten Virtual</strong>
-              </div>
-            </div>
-
-            <div className="ai-message-list">
-              {chatMessages.map((message, index) => (
-                <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
-                  {message.text}
-                </div>
-              ))}
-              {chatLoading && <div className="ai-message assistant">Memproses pertanyaan...</div>}
-            </div>
-
-            <div className="ai-input-row">
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(event) => setChatInput(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') {
-                    askVirtualAssistant()
-                  }
-                }}
-                placeholder="Tanya stok atau rekomendasi beli..."
-              />
-              <button type="button" className="primary-button" onClick={askVirtualAssistant} disabled={chatLoading}>
-                Kirim
-              </button>
-            </div>
-          </div>
-        )}
       </main>
     </div>
   )
