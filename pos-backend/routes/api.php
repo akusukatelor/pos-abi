@@ -31,5 +31,7 @@ Route::apiResource('expenses', ExpenseController::class);
 Route::apiResource('shifts', ShiftController::class);
 Route::apiResource('discounts', DiscountController::class);
 Route::apiResource('payment-methods', PaymentMethodController::class);
+Route::get('products/restock', [ProductController::class, 'restock']);
+Route::post('assistant/chat', [ProductController::class, 'chat']);
 Route::apiResource('products', ProductController::class);
 Route::apiResource('transactions', TransactionController::class);

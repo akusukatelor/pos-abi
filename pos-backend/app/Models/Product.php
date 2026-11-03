@@ -11,8 +11,8 @@ class Product extends Model
 
     // 1. TAMBAHKAN unit_id ke dalam array ini
     protected $fillable = [
-        'category_id', 'unit_id', 'sku_code', 'name', 
-        'buy_price', 'sell_price', 'stock'
+        'category_id', 'unit_id', 'sku_code', 'name',
+        'buy_price', 'sell_price', 'stock', 'minimum_stock'
     ];
 
     public function category()

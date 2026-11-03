@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 
 const API_BASE = '/api'
@@ -42,6 +42,7 @@ const getInitialProductForm = () => ({
   buy_price: '',
   sell_price: '',
   stock: '',
+  minimum_stock: '5',
 })
 const getInitialDiscountForm = () => ({
   name: '',
@@ -71,6 +72,14 @@ const getInitialStockForm = () => ({
   description: '',
 })
 
+function BrandLogo() {
+  return (
+    <div className="brand-identity" aria-label="Toko Abicell logo">
+      <img className="brand-logo-image" src="/logo_abicell.png" alt="Toko Abicell" />
+    </div>
+  )
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
   const [loading, setLoading] = useState(true)
@@ -81,6 +90,7 @@ function App() {
   const [suppliers, setSuppliers] = useState([])
   const [customers, setCustomers] = useState([])
   const [products, setProducts] = useState([])
+  const [restockRecommendations, setRestockRecommendations] = useState([])
   const [transactions, setTransactions] = useState([])
   const [discounts, setDiscounts] = useState([])
   const [expenses, setExpenses] = useState([])
@@ -109,16 +119,28 @@ function App() {
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
   const [payAmount, setPayAmount] = useState('')
   const [productSearch, setProductSearch] = useState('')
+  const [paymentMethod, setPaymentMethod] = useState('cash')
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState([
+    {
+      role: 'assistant',
+      text: 'Halo! Saya asisten POS. Saya bisa bantu cek stok dan merekomendasikan pembelian ulang.',
+    },
+  ])
+  const [chatLoading, setChatLoading] = useState(false)
+
+  const searchInputRef = useRef(null)
 
   const loadAllData = async () => {
     try {
       setLoading(true)
-      const [categoriesRes, unitsRes, suppliersRes, customersRes, productsRes, transactionsRes, discountsRes, expensesRes, shiftsRes, stockRes] = await Promise.all([
+      const [categoriesRes, unitsRes, suppliersRes, customersRes, productsRes, restockRes, transactionsRes, discountsRes, expensesRes, shiftsRes, stockRes] = await Promise.all([
         apiRequest('/categories'),
         apiRequest('/units'),
         apiRequest('/suppliers'),
         apiRequest('/customers'),
         apiRequest('/products'),
+        apiRequest('/products/restock'),
         apiRequest('/transactions'),
         apiRequest('/discounts'),
         apiRequest('/expenses'),
@@ -131,6 +153,7 @@ function App() {
       setSuppliers(suppliersRes.data || [])
       setCustomers(customersRes.data || [])
       setProducts(productsRes.data || [])
+      setRestockRecommendations(restockRes.data || [])
       setTransactions(transactionsRes.data || [])
       setDiscounts(discountsRes.data || [])
       setExpenses(expensesRes.data || [])
@@ -174,10 +197,137 @@ function App() {
     }
   }, [transactions, expenses, products, shifts])
 
+  const reportSummary = useMemo(() => {
+    const totalRevenue = transactions.reduce((sum, item) => sum + Number(item.total_price || 0), 0)
+    const totalPaid = transactions.reduce((sum, item) => sum + Number(item.pay_amount || 0), 0)
+    const unpaid = transactions.filter((item) => item.payment_status !== 'paid').length
+    const criticalStock = products.filter((product) => Number(product.stock || 0) <= Number(product.minimum_stock ?? 5)).length
+
+    return {
+      totalRevenue,
+      totalPaid,
+      unpaid,
+      criticalStock,
+      transactionCount: transactions.length,
+    }
+  }, [transactions, products])
+
   const totalCart = cart.reduce((sum, item) => sum + Number(item.quantity || 0) * Number(item.sell_price || 0), 0)
+
+  const lowStockProducts = useMemo(() => {
+    if (restockRecommendations.length) {
+      return restockRecommendations.map((product) => ({
+        ...product,
+        minimumStock: Number(product.minimum_stock ?? 5),
+        recommendedQty: Number(product.recommended_quantity ?? Math.max(Number(product.minimum_stock ?? 5) - Number(product.stock || 0), 1)),
+      }))
+    }
+
+    const threshold = 5
+
+    return products
+      .filter((product) => Number(product.stock || 0) < Number(product.minimum_stock ?? product.min_stock ?? threshold))
+      .map((product) => ({
+        ...product,
+        minimumStock: Number(product.minimum_stock ?? product.min_stock ?? threshold),
+        recommendedQty: Math.max(Number(product.minimum_stock ?? product.min_stock ?? threshold) - Number(product.stock || 0), 1),
+      }))
+  }, [products, restockRecommendations])
+
+  const cashPaymentError = useMemo(() => {
+    if (paymentMethod !== 'cash' || !cart.length) {
+      return ''
+    }
+
+    const numericPayAmount = Number(payAmount || 0)
+    if (numericPayAmount < totalCart) {
+      return 'Nominal uang tunai kurang dari total belanja.'
+    }
+
+    return ''
+  }, [paymentMethod, payAmount, cart.length, totalCart])
+
+  const isCashPaymentDisabled = paymentMethod === 'cash' && cart.length > 0 && Number(payAmount || 0) < totalCart
 
   const refresh = async () => {
     await loadAllData()
+  }
+
+  const buildAssistantReply = (question, lowStockItems) => {
+    const lowerQuestion = question.toLowerCase().trim()
+
+    if (!lowerQuestion) {
+      return 'Tanya saya soal stok, restok, atau penjualan hari ini.'
+    }
+
+    const matchedProduct = products.find((product) => {
+      const productText = `${product.name} ${product.sku_code || ''}`.toLowerCase()
+      return productText.includes(lowerQuestion) || lowerQuestion.includes(productText)
+    })
+
+    if (matchedProduct) {
+      const minStock = Number(matchedProduct.minimum_stock ?? 5)
+      const stock = Number(matchedProduct.stock || 0)
+      const gap = Math.max(minStock - stock, 0)
+
+      return `Stok ${matchedProduct.name} saat ini ${stock} pcs. Batas minimum ${minStock} pcs.${gap > 0 ? ` Saat ini masih di bawah batas minimum dengan kekurangan ${gap} pcs. Saya sarankan restok segera.` : ' Masih aman dan belum perlu restok.'}`
+    }
+
+    if (lowerQuestion.includes('stok') || lowerQuestion.includes('restok') || lowerQuestion.includes('belanja')) {
+      if (!lowStockItems.length) {
+        return 'Semua produk saat ini masih aman dari stok kritis. Tetap pantau pembelian untuk menjaga ketersediaan.'
+      }
+
+      const topItems = lowStockItems
+        .slice(0, 3)
+        .map((product) => `${product.name} (${product.stock} pcs, butuh ${product.recommendedQty ?? product.recommended_quantity ?? 1} pcs lagi)`)
+        .join('; ')
+
+      return `Saya melihat stok kritis pada: ${topItems}. Prioritaskan pembelian ulang agar penjualan tidak terganggu.`
+    }
+
+    if (lowerQuestion.includes('penjualan') || lowerQuestion.includes('omzet') || lowerQuestion.includes('jualan')) {
+      return `Total produk saat ini ${products.length}. Anda memiliki ${lowStockProducts.length} item yang memerlukan restock.`
+    }
+
+    if (lowerQuestion.includes('halo') || lowerQuestion.includes('hai') || lowerQuestion.includes('hello')) {
+      return 'Halo! Saya bisa bantu cek stok, rekomendasi restok, atau ringkasan penjualan hari ini.'
+    }
+
+    return 'Saya dapat membantu mengecek stok kritis, rekomendasi pembelian, dan kondisi penjualan harian. Coba tanya stok produk atau kebutuhan restok.'
+  }
+
+  const askVirtualAssistant = async () => {
+    const question = chatInput.trim()
+
+    if (!question) {
+      return
+    }
+
+    setChatMessages((current) => [...current, { role: 'user', text: question }])
+    setChatInput('')
+    setChatLoading(true)
+
+    try {
+      const response = await apiRequest('/assistant/chat', {
+        method: 'POST',
+        body: JSON.stringify({
+          question,
+          context: {
+            total_products: products.length,
+            low_stock_products: restockRecommendations.slice(0, 3),
+          },
+        }),
+      })
+
+      const answer = response?.data?.answer || response?.reply || response?.message || buildAssistantReply(question, lowStockProducts)
+      setChatMessages((current) => [...current, { role: 'assistant', text: answer }])
+    } catch (error) {
+      const fallbackReply = buildAssistantReply(question, lowStockProducts)
+      setChatMessages((current) => [...current, { role: 'assistant', text: fallbackReply }])
+    } finally {
+      setChatLoading(false)
+    }
   }
 
   const createCategory = async (event) => {
@@ -290,6 +440,7 @@ function App() {
       buy_price: Number(productForm.buy_price),
       sell_price: Number(productForm.sell_price),
       stock: Number(productForm.stock),
+      minimum_stock: Number(productForm.minimum_stock || 0),
     }
 
     try {
@@ -479,6 +630,11 @@ function App() {
       return
     }
 
+    if (paymentMethod === 'cash' && Number(payAmount || 0) < totalCart) {
+      setNotice('Nominal uang tunai belum mencukupi total belanja.')
+      return
+    }
+
     const payload = {
       user_id: DEFAULT_USER_ID,
       customer_id: selectedCustomerId || null,
@@ -498,6 +654,7 @@ function App() {
       setCart([])
       setPayAmount('')
       setSelectedCustomerId('')
+      setPaymentMethod('cash')
       await refresh()
       setNotice(`Transaksi ${response.data.invoice_number} berhasil dibuat`)
     } catch (error) {
@@ -553,21 +710,21 @@ function App() {
 
         <section className="panel">
           <div className="panel-header">
-            <h3>Produk stok rendah</h3>
+            <h3>Daftar Rekomendasi Belanja</h3>
           </div>
           <ul className="simple-list">
-            {products.filter((product) => Number(product.stock || 0) <= 5).length ? (
-              products
-                .filter((product) => Number(product.stock || 0) <= 5)
-                .slice(0, 5)
-                .map((product) => (
-                  <li key={product.id}>
+            {restockRecommendations.length ? (
+              lowStockProducts.slice(0, 5).map((product) => (
+                <li key={product.id}>
+                  <div className="stock-list-item">
                     <span>{product.name}</span>
-                    <strong>{product.stock} pcs</strong>
-                  </li>
-                ))
+                    <small>{product.stock} / {product.minimumStock ?? product.minimum_stock ?? 5} pcs</small>
+                  </div>
+                  <strong>+{product.recommendedQty ?? product.recommended_quantity ?? 1}</strong>
+                </li>
+              ))
             ) : (
-              <li className="muted">Semua stok terlihat aman.</li>
+              <li className="muted">Belum ada rekomendasi restok saat ini.</li>
             )}
           </ul>
         </section>
@@ -621,6 +778,7 @@ function App() {
                           buy_price: product.buy_price,
                           sell_price: product.sell_price,
                           stock: product.stock,
+                          minimum_stock: product.minimum_stock ?? 5,
                         })
                         setEditingProductId(product.id)
                         setActiveTab('master')
@@ -706,6 +864,13 @@ function App() {
             placeholder="Stok awal"
             required
           />
+          <input
+            type="number"
+            min="0"
+            value={productForm.minimum_stock}
+            onChange={(event) => setProductForm({ ...productForm, minimum_stock: event.target.value })}
+            placeholder="Stok minimum"
+          />
 
           <div className="form-actions">
             <button type="submit" className="primary-button">
@@ -730,11 +895,31 @@ function App() {
   )
 
   const renderMasterData = () => (
-    <div className="page-grid">
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingCategoryId ? 'Edit kategori' : 'Tambah kategori'}</h3>
+    <div className="page-grid master-layout">
+      <div className="summary-grid master-summary-grid">
+        <div className="metric-card">
+          <span>Kategori</span>
+          <strong>{categories.length}</strong>
         </div>
+        <div className="metric-card">
+          <span>Satuan</span>
+          <strong>{units.length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>Pelanggan</span>
+          <strong>{customers.length}</strong>
+        </div>
+        <div className="metric-card">
+          <span>Supplier</span>
+          <strong>{suppliers.length}</strong>
+        </div>
+      </div>
+
+      <div className="master-grid">
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingCategoryId ? 'Edit kategori' : 'Tambah kategori'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createCategory}>
           <input
             value={categoryForm.name}
@@ -797,12 +982,12 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingUnitId ? 'Edit satuan' : 'Tambah satuan'}</h3>
-        </div>
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingUnitId ? 'Edit satuan' : 'Tambah satuan'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createUnit}>
           <input
             value={unitForm.name}
@@ -872,12 +1057,12 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingCustomerId ? 'Edit pelanggan' : 'Tambah pelanggan'}</h3>
-        </div>
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingCustomerId ? 'Edit pelanggan' : 'Tambah pelanggan'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createCustomer}>
           <input
             value={customerForm.name}
@@ -959,12 +1144,12 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingSupplierId ? 'Edit supplier' : 'Tambah supplier'}</h3>
-        </div>
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingSupplierId ? 'Edit supplier' : 'Tambah supplier'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createSupplier}>
           <input
             value={supplierForm.name}
@@ -1050,12 +1235,12 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingDiscountId ? 'Edit diskon' : 'Tambah diskon'}</h3>
-        </div>
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingDiscountId ? 'Edit diskon' : 'Tambah diskon'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createDiscount}>
           <input
             value={discountForm.name}
@@ -1164,12 +1349,12 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
 
-      <section className="panel">
-        <div className="panel-header">
-          <h3>{editingExpenseId ? 'Edit pengeluaran' : 'Catat pengeluaran'}</h3>
-        </div>
+        <section className="panel master-form-card">
+          <div className="panel-header">
+            <h3>{editingExpenseId ? 'Edit pengeluaran' : 'Catat pengeluaran'}</h3>
+          </div>
         <form className="form-grid" onSubmit={createExpense}>
           <input
             type="number"
@@ -1269,7 +1454,8 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
+        </section>
+      </div>
     </div>
   )
 
@@ -1278,17 +1464,24 @@ function App() {
       <section className="panel">
         <div className="panel-header split-header">
           <h3>Kasir</h3>
-          <button type="button" className="primary-button" onClick={submitCheckout}>
-            Checkout
+          <button
+            type="button"
+            className="primary-button"
+            onClick={submitCheckout}
+            disabled={isCashPaymentDisabled || !cart.length}
+          >
+            Bayar
           </button>
         </div>
 
         <div className="cart-bar">
           <input
+            ref={searchInputRef}
             type="text"
-            placeholder="Cari produk"
+            placeholder="Cari produk / scan barcode"
             value={productSearch}
             onChange={(event) => setProductSearch(event.target.value)}
+            autoFocus
           />
           <select value={selectedCustomerId} onChange={(event) => setSelectedCustomerId(event.target.value)}>
             <option value="">Pelanggan umum</option>
@@ -1296,6 +1489,14 @@ function App() {
               <option key={customer.id} value={customer.id}>{customer.name}</option>
             ))}
           </select>
+          <select value={paymentMethod} onChange={(event) => setPaymentMethod(event.target.value)}>
+            <option value="cash">Tunai</option>
+            <option value="transfer">Transfer</option>
+            <option value="ewallet">E-Wallet</option>
+          </select>
+        </div>
+
+        <div className="payment-row">
           <input
             type="number"
             min="0"
@@ -1303,7 +1504,16 @@ function App() {
             onChange={(event) => setPayAmount(event.target.value)}
             placeholder="Uang bayar"
           />
+          <button
+            type="button"
+            className="primary-button pay-button"
+            onClick={submitCheckout}
+            disabled={isCashPaymentDisabled || !cart.length}
+          >
+            Bayar
+          </button>
         </div>
+        {cashPaymentError && <div className="payment-error">{cashPaymentError}</div>}
 
         <div className="product-grid">
           {filteredProducts.map((product) => (
@@ -1365,38 +1575,63 @@ function App() {
   )
 
   const renderTransactions = () => (
-    <section className="panel">
-      <div className="panel-header">
-        <h3>Riwayat transaksi</h3>
+    <div className="page-grid">
+      <div className="summary-grid report-summary-grid">
+        <div className="metric-card info-card">
+          <span>Revenue</span>
+          <strong>{currency.format(reportSummary.totalRevenue)}</strong>
+        </div>
+        <div className="metric-card success-card">
+          <span>Transaksi</span>
+          <strong>{reportSummary.transactionCount}</strong>
+        </div>
+        <div className="metric-card warning-card">
+          <span>Belum Lunas</span>
+          <strong>{reportSummary.unpaid}</strong>
+        </div>
+        <div className="metric-card danger-card">
+          <span>Stok Kritis</span>
+          <strong>{reportSummary.criticalStock}</strong>
+        </div>
       </div>
 
-      <div className="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>Invoice</th>
-              <th>Pelanggan</th>
-              <th>Total</th>
-              <th>Bayar</th>
-              <th>Status</th>
-              <th>Waktu</th>
-            </tr>
-          </thead>
-          <tbody>
-            {transactions.map((transaction) => (
-              <tr key={transaction.id}>
-                <td>{transaction.invoice_number}</td>
-                <td>{transaction.customer?.name || 'Umum'}</td>
-                <td>{currency.format(transaction.total_price || 0)}</td>
-                <td>{currency.format(transaction.pay_amount || 0)}</td>
-                <td>{transaction.payment_status}</td>
-                <td>{new Date(transaction.created_at).toLocaleString('id-ID')}</td>
+      <section className="panel">
+        <div className="panel-header">
+          <h3>Riwayat transaksi</h3>
+        </div>
+
+        <div className="table-wrap">
+          <table className="report-table">
+            <thead>
+              <tr>
+                <th>Invoice</th>
+                <th>Pelanggan</th>
+                <th>Total</th>
+                <th>Bayar</th>
+                <th>Status</th>
+                <th>Waktu</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
+            </thead>
+            <tbody>
+              {transactions.map((transaction) => (
+                <tr key={transaction.id}>
+                  <td>{transaction.invoice_number}</td>
+                  <td>{transaction.customer?.name || 'Umum'}</td>
+                  <td>{currency.format(transaction.total_price || 0)}</td>
+                  <td>{currency.format(transaction.pay_amount || 0)}</td>
+                  <td>
+                    <span className={`status-badge ${transaction.payment_status === 'paid' ? 'paid' : 'pending'}`}>
+                      {transaction.payment_status === 'paid' ? 'Lunas' : 'Belum lunas'}
+                    </span>
+                  </td>
+                  <td>{new Date(transaction.created_at).toLocaleString('id-ID')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
   )
 
   const renderInventory = () => (
@@ -1569,22 +1804,18 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand-box">
-          <div className="brand-mark">P</div>
-          <div>
-            <h2>POS App</h2>
-            <p>Backend Ready</p>
-          </div>
+          <BrandLogo />
         </div>
 
         <nav className="nav-menu">
           {[
             ['dashboard', 'Dashboard'],
-            ['catalog', 'Produk'],
-            ['master', 'Master Data'],
-            ['cashier', 'Kasir'],
-            ['transactions', 'Transaksi'],
-            ['inventory', 'Stok'],
-            ['shift', 'Shift'],
+            ['cashier', 'Point of Sale (POS)'],
+            ['catalog', 'Inventory'],
+            ['master', 'Supplier'],
+            ['transactions', 'Reports'],
+            ['inventory', 'Digital Services'],
+            ['shift', 'Settings'],
           ].map(([key, label]) => (
             <button
               key={key}
@@ -1600,13 +1831,24 @@ function App() {
 
       <main className="main-panel">
         <header className="topbar">
-          <div>
-            <p className="eyebrow">Aplikasi POS</p>
-            <h1>Dashboard</h1>
+          <div className="topbar-title-wrap">
+            <h1>{activeTab === 'dashboard' ? 'Dashboard - LARIS ABICELL' : 'Dashboard'}</h1>
           </div>
-          <button type="button" className="refresh-button" onClick={refresh}>
-            Refresh data
-          </button>
+          <div className="topbar-actions">
+            <div className="search-box">
+              <span className="search-icon">⌕</span>
+              <input type="text" placeholder="Search" />
+            </div>
+            <button type="button" className="icon-button" aria-label="Notifications">⏺</button>
+            <button type="button" className="icon-button" aria-label="Refresh" onClick={refresh}>↻</button>
+            <div className="user-pill">
+              <span className="user-avatar">SR</span>
+              <div>
+                <span className="user-label">Admin / Owner</span>
+              </div>
+              <span className="user-indicator" />
+            </div>
+          </div>
         </header>
 
         {notice && <div className="notice-banner">{notice}</div>}
@@ -1620,6 +1862,43 @@ function App() {
         {!loading && activeTab === 'transactions' && renderTransactions()}
         {!loading && activeTab === 'inventory' && renderInventory()}
         {!loading && activeTab === 'shift' && renderShift()}
+
+        {activeTab === 'dashboard' && (
+          <div className="ai-floating-widget">
+            <div className="ai-widget-header">
+              <div>
+                <span className="ai-pill">AI</span>
+                <strong>Asisten Virtual</strong>
+              </div>
+            </div>
+
+            <div className="ai-message-list">
+              {chatMessages.map((message, index) => (
+                <div key={`${message.role}-${index}`} className={`ai-message ${message.role}`}>
+                  {message.text}
+                </div>
+              ))}
+              {chatLoading && <div className="ai-message assistant">Memproses pertanyaan...</div>}
+            </div>
+
+            <div className="ai-input-row">
+              <input
+                type="text"
+                value={chatInput}
+                onChange={(event) => setChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') {
+                    askVirtualAssistant()
+                  }
+                }}
+                placeholder="Tanya stok atau rekomendasi beli..."
+              />
+              <button type="button" className="primary-button" onClick={askVirtualAssistant} disabled={chatLoading}>
+                Kirim
+              </button>
+            </div>
+          </div>
+        )}
       </main>
     </div>
   )
