@@ -4,139 +4,225 @@ namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
 use App\Models\Product;
+use App\Models\ProductPriceHistory;
+use App\Models\StockMovement;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Validation\ValidationException;
 
 class ProductController extends Controller
 {
-    /**
-     * Tampilkan daftar produk
-     * Menggunakan Eager Loading (with) untuk mengambil data relasi Category dan Unit
-     */
     public function index(Request $request)
     {
-        // Fitur tambahan: Pencarian (Search) berdasarkan nama atau SKU
-        // Ini akan sangat berguna untuk Frontend React nanti
         $query = Product::with(['category', 'unit']);
 
-        if ($request->has('search')) {
-            $search = $request->search;
-            $query->where('name', 'LIKE', "%{$search}%")
-                  ->orWhere('sku_code', 'LIKE', "%{$search}%");
+        // Produk nonaktif hanya dapat ditampilkan secara eksplisit oleh Owner.
+        if (!$request->user()->isOwner() || !$request->boolean('include_inactive')) {
+            $query->where('is_active', true);
         }
 
-        // Mengambil data, bisa gunakan get() untuk semua, atau paginate() jika data banyak
-        $products = $query->latest()->get(); 
+        if ($request->filled('search')) {
+            $search = trim((string) $request->input('search'));
+            $query->where(function ($builder) use ($search): void {
+                $builder->where('name', 'LIKE', "%{$search}%")
+                    ->orWhere('sku_code', 'LIKE', "%{$search}%");
+            });
+        }
+
+        $products = $query->latest()->paginate(50);
+
+        // Kasir only receives the master purchase price when loading the Inventory
+        // receiving form. The normal POS catalog continues to hide this field.
+        $canViewPurchasePrice = $request->user()->isOwner()
+            || ($request->user()->role === 'kasir' && $request->boolean('for_receiving'));
+
+        if (!$canViewPurchasePrice) {
+            $products->getCollection()->each(fn (Product $product) => $product->makeHidden('buy_price'));
+        }
 
         return response()->json([
             'status' => 'success',
-            'data' => $products
-        ], 200);
+            'data' => $products,
+        ]);
     }
 
-    /**
-     * Simpan produk baru
-     */
     public function store(Request $request)
     {
-        $request->validate([
-            'category_id' => 'required|exists:categories,id',
-            'unit_id'     => 'nullable|exists:units,id', // Opsional, tapi jika diisi harus valid
-            'sku_code'    => 'required|string|unique:products,sku_code',
-            'name'        => 'required|string|max:255',
-            'buy_price'   => 'required|numeric|min:0',
-            'sell_price'  => 'required|numeric|min:0',
-            'stock'       => 'required|integer|min:0'
+        $validated = $request->validate([
+            'category_id' => ['required', 'integer', 'exists:categories,id'],
+            'unit_id' => ['nullable', 'integer', 'exists:units,id'],
+            'sku_code' => ['required', 'string', 'max:100', 'unique:products,sku_code'],
+            'name' => ['required', 'string', 'max:255'],
+            'buy_price' => ['required', 'numeric', 'min:0'],
+            'sell_price' => ['required', 'numeric', 'min:0'],
+            'stock' => ['sometimes', 'integer', 'min:0'],
         ]);
 
-        $product = Product::create([
-            'category_id' => $request->category_id,
-            'unit_id'     => $request->unit_id,
-            'sku_code'    => $request->sku_code,
-            'name'        => $request->name,
-            'buy_price'   => $request->buy_price,
-            'sell_price'  => $request->sell_price,
-            'stock'       => $request->stock
-        ]);
+        $initialStock = (int) ($validated['stock'] ?? 0);
+        unset($validated['stock']);
 
-        // Load relasi agar response JSON langsung menampilkan detail kategori & unit
-        $product->load(['category', 'unit']);
+        $product = DB::transaction(function () use ($validated, $initialStock, $request): Product {
+            $product = Product::create([
+                ...$validated,
+                'stock' => 0,
+                'is_active' => true,
+            ]);
+
+            if ($initialStock > 0) {
+                StockMovement::create([
+                    'product_id' => $product->id,
+                    'user_id' => $request->user()->id,
+                    'type' => 'in',
+                    'quantity' => $initialStock,
+                    'description' => 'Stok awal saat produk dibuat.',
+                ]);
+
+                $product->stock = $initialStock;
+                $product->save();
+            }
+
+            return $product->load(['category', 'unit']);
+        });
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Produk berhasil ditambahkan',
-            'data' => $product
+            'message' => 'Produk berhasil ditambahkan.',
+            'data' => $product,
         ], 201);
     }
 
-    /**
-     * Tampilkan satu data produk spesifik
-     */
-    public function show($id)
+    public function show(Request $request, $id)
     {
-        // Cari produk berdasarkan ID beserta relasinya
-        $product = Product::with(['category', 'unit'])->find($id);
+        $product = Product::with(['category', 'unit'])
+            ->where('is_active', true)
+            ->find($id);
 
         if (!$product) {
-            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan'], 404);
+            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan.'], 404);
         }
 
-        return response()->json(['status' => 'success', 'data' => $product], 200);
+        if (!$request->user()->isOwner()) {
+            $product->makeHidden('buy_price');
+        }
+
+        return response()->json(['status' => 'success', 'data' => $product]);
     }
 
-    /**
-     * Update data produk
-     */
     public function update(Request $request, $id)
     {
-        $product = Product::find($id);
+        $validated = $request->validate([
+            'category_id' => ['sometimes', 'required', 'integer', 'exists:categories,id'],
+            'unit_id' => ['sometimes', 'nullable', 'integer', 'exists:units,id'],
+            'sku_code' => ['sometimes', 'required', 'string', 'max:100', 'unique:products,sku_code,'.$id],
+            'name' => ['sometimes', 'required', 'string', 'max:255'],
+            'buy_price' => ['sometimes', 'required', 'numeric', 'decimal:0,2', 'min:0', 'max:9999999999.99'],
+            'buy_price_change_reason' => ['sometimes', 'nullable', 'string', 'max:255'],
+            'sell_price' => ['sometimes', 'required', 'numeric', 'decimal:0,2', 'min:0'],
+            'stock' => ['prohibited'],
+        ]);
 
-        if (!$product) {
-            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan'], 404);
+        // Keep compatibility with the Laravel version used by this project:
+        // validate the dependency explicitly instead of using prohibited_without.
+        if (
+            array_key_exists('buy_price_change_reason', $validated)
+            && !array_key_exists('buy_price', $validated)
+        ) {
+            throw ValidationException::withMessages([
+                'buy_price_change_reason' => 'Alasan perubahan harga beli hanya boleh dikirim bersama harga beli.',
+            ]);
         }
 
-        $request->validate([
-            'category_id' => 'required|exists:categories,id',
-            'unit_id'     => 'nullable|exists:units,id',
-            // Rule unique: abaikan pengecekan unique untuk ID produk ini sendiri
-            'sku_code'    => 'required|string|unique:products,sku_code,' . $id,
-            'name'        => 'required|string|max:255',
-            'buy_price'   => 'required|numeric|min:0',
-            'sell_price'  => 'required|numeric|min:0',
-            'stock'       => 'required|integer|min:0'
-        ]);
+        $changeReason = trim((string) ($validated['buy_price_change_reason'] ?? ''));
+        unset($validated['buy_price_change_reason']);
 
-        $product->update([
-            'category_id' => $request->category_id,
-            'unit_id'     => $request->unit_id,
-            'sku_code'    => $request->sku_code,
-            'name'        => $request->name,
-            'buy_price'   => $request->buy_price,
-            'sell_price'  => $request->sell_price,
-            'stock'       => $request->stock
-        ]);
+        if (empty($validated)) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Tidak ada perubahan data produk yang dikirim.',
+            ], 422);
+        }
 
-        $product->load(['category', 'unit']);
+        $product = DB::transaction(function () use ($validated, $changeReason, $id, $request): ?Product {
+            $product = Product::query()
+                ->where('is_active', true)
+                ->whereKey($id)
+                ->lockForUpdate()
+                ->first();
+
+            if (!$product) {
+                return null;
+            }
+
+            if (array_key_exists('buy_price', $validated)) {
+                $oldPriceCents = (int) round(((float) $product->buy_price) * 100);
+                $newPriceCents = (int) round(((float) $validated['buy_price']) * 100);
+
+                if ($oldPriceCents !== $newPriceCents) {
+                    if ($changeReason === '') {
+                        throw ValidationException::withMessages([
+                            'buy_price_change_reason' => 'Alasan perubahan harga beli wajib diisi.',
+                        ]);
+                    }
+
+                    ProductPriceHistory::query()->create([
+                        'product_id' => $product->id,
+                        'changed_by' => $request->user()->id,
+                        'old_price' => number_format($oldPriceCents / 100, 2, '.', ''),
+                        'new_price' => number_format($newPriceCents / 100, 2, '.', ''),
+                        'reason' => $changeReason,
+                    ]);
+                }
+            }
+
+            $product->update($validated);
+
+            return $product->load(['category', 'unit']);
+        }, 3);
+
+        if (!$product) {
+            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan.'], 404);
+        }
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Produk berhasil diupdate',
-            'data' => $product
-        ], 200);
+            'message' => 'Data produk berhasil diperbarui. Perubahan harga beli master dicatat dalam riwayat audit.',
+            'data' => $product,
+        ]);
     }
 
-    /**
-     * Hapus produk
-     */
+    public function priceHistory(int $id)
+    {
+        $product = Product::query()->find($id);
+
+        if (!$product) {
+            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan.'], 404);
+        }
+
+        $histories = ProductPriceHistory::query()
+            ->with('changer:id,name')
+            ->where('product_id', $product->id)
+            ->latest()
+            ->paginate(20);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $histories,
+        ]);
+    }
+
     public function destroy($id)
     {
         $product = Product::find($id);
 
         if (!$product) {
-            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan'], 404);
+            return response()->json(['status' => 'error', 'message' => 'Produk tidak ditemukan.'], 404);
         }
 
-        $product->delete();
+        $product->update(['is_active' => false]);
 
-        return response()->json(['status' => 'success', 'message' => 'Produk berhasil dihapus'], 200);
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Produk dinonaktifkan. Riwayat transaksi dan pergerakan stok tetap dipertahankan.',
+        ]);
     }
 }

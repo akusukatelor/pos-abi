@@ -86,6 +86,13 @@ class SupplierController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Data supplier tidak ditemukan'], 404);
         }
 
+        if ($supplier->purchaseReceipts()->exists()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Supplier memiliki riwayat penerimaan barang dan tidak dapat dihapus. Pertahankan data supplier untuk menjaga histori pembelian.',
+            ], 409);
+        }
+
         $supplier->delete();
 
         return response()->json(['status' => 'success', 'message' => 'Supplier berhasil dihapus'], 200);
