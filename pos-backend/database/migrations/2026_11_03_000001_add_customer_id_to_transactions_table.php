@@ -11,9 +11,15 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::table('transactions', function (Blueprint $table) {
-            $table->foreignId('customer_id')->nullable()->after('user_id')->constrained('customers')->onDelete('set null');
-        });
+        if (!Schema::hasColumn('transactions', 'customer_id')) {
+            Schema::table('transactions', function (Blueprint $table): void {
+                $table->foreignId('customer_id')
+                    ->nullable()
+                    ->after('user_id')
+                    ->constrained('customers')
+                    ->nullOnDelete();
+            });
+        }
     }
 
     /**
@@ -21,8 +27,13 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::table('transactions', function (Blueprint $table) {
-            $table->dropConstrainedForeignId('customer_id');
-        });
+        $hasCustomerForeignKey = collect(Schema::getForeignKeys('transactions'))
+            ->contains(fn (array $foreignKey): bool => $foreignKey['columns'] === ['customer_id']);
+
+        if ($hasCustomerForeignKey) {
+            Schema::table('transactions', function (Blueprint $table): void {
+                $table->dropConstrainedForeignId('customer_id');
+            });
+        }
     }
 };

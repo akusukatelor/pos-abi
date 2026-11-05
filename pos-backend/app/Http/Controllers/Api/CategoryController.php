@@ -85,11 +85,18 @@ class CategoryController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Data tidak ditemukan'], 404);
         }
 
+        if ($category->products()->exists()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Kategori tidak dapat dihapus karena masih digunakan oleh produk. Pindahkan produk terlebih dahulu.',
+            ], 409);
+        }
+
         $category->delete();
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Kategori berhasil dihapus'
+            'message' => 'Kategori berhasil dihapus.',
         ], 200);
     }
 }

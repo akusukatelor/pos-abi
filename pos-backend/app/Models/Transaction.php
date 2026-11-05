@@ -9,24 +9,47 @@ class Transaction extends Model
 {
     use HasFactory;
 
-    // 1. TAMBAHKAN discount_id dan discount_amount ke dalam array ini
     protected $fillable = [
-        'user_id', 'discount_id', 'customer_id', // Tambah customer_id
-        'invoice_number', 'total_price', 'discount_amount', 'pay_amount',
-        'payment_status', 'due_date' // Tambah status dan jatuh tempo
+        'user_id',
+        'customer_id',
+        'discount_id',
+        'invoice_number',
+        'total_price',
+        'pay_amount',
+        'payment_method',
+        'change_amount',
+        'discount_amount',
+        'payment_status',
+        'due_date',
+        'qris_verified_by',
+        'qris_verified_at',
+        'payment_reference',
+        'idempotency_key',
+        'idempotency_hash',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'total_price' => 'decimal:2',
+            'pay_amount' => 'decimal:2',
+            'change_amount' => 'decimal:2',
+            'discount_amount' => 'decimal:2',
+            'due_date' => 'date',
+            'qris_verified_at' => 'datetime',
+        ];
+    }
 
     public function user()
     {
         return $this->belongsTo(User::class);
     }
 
-    public function details() 
+    public function details()
     {
         return $this->hasMany(TransactionDetail::class);
     }
 
-    // 2. TAMBAHKAN RELASI INI
     public function discount()
     {
         return $this->belongsTo(Discount::class);
@@ -35,5 +58,10 @@ class Transaction extends Model
     public function customer()
     {
         return $this->belongsTo(Customer::class);
+    }
+
+    public function qrisVerifier()
+    {
+        return $this->belongsTo(User::class, 'qris_verified_by');
     }
 }
