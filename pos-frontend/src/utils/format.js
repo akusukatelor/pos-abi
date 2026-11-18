@@ -47,5 +47,6 @@ export function initials(value = '') {
 export function paymentLabel(method) {
   if (method === 'qris_gopay') return 'QRIS GoPay'
   if (method === 'cash') return 'Tunai'
+  if (method === 'debt' || method === 'kasbon') return 'Kasbon'
   return method || '—'
 }

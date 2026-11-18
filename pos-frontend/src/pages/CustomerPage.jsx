@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client.js'
 import Icon from '../components/Icon.jsx'
@@ -56,6 +55,14 @@ export default function CustomerPage({ search = '' }) {
   const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [detailError, setDetailError] = useState('')
+
+  // Modal bayar piutang
+  const [payDebtOpen, setPayDebtOpen] = useState(false)
+  const [payingCustomer, setPayingCustomer] = useState(null)
+  const [payingTransaction, setPayingTransaction] = useState(null)
+  const [payDebtAmount, setPayDebtAmount] = useState('')
+  const [payDebtSaving, setPayDebtSaving] = useState(false)
+  const [payDebtError, setPayDebtError] = useState('')
 
   // =========================================
   // LOAD DATA CUSTOMER
@@ -265,6 +272,100 @@ export default function CustomerPage({ search = '' }) {
   }
 
   // =========================================
+  // BAYAR / LUNASI PIUTANG CUSTOMER
+  // =========================================
+
+  const openPayDebtModal = (customer, transaction = null) => {
+    setPayingCustomer(customer)
+    setPayingTransaction(transaction)
+    setPayDebtError('')
+
+    if (transaction) {
+      const remainingTx = Math.max(
+        0,
+        Number(transaction.total_price || 0) - Number(transaction.pay_amount || 0)
+      )
+      setPayDebtAmount(String(remainingTx))
+    } else {
+      setPayDebtAmount(String(Number(customer.total_debt || 0)))
+    }
+
+    setPayDebtOpen(true)
+  }
+
+  const maxPayableDebt = useMemo(() => {
+    if (payingTransaction) {
+      return Math.max(
+        0,
+        Number(payingTransaction.total_price || 0) - Number(payingTransaction.pay_amount || 0)
+      )
+    }
+    return Math.max(0, Number(payingCustomer?.total_debt || 0))
+  }, [payingCustomer, payingTransaction])
+
+  const handlePayDebtSubmit = async (event) => {
+    event.preventDefault()
+
+    if (!payingCustomer) return
+
+    const numericAmount = Number(payDebtAmount || 0)
+
+    if (!numericAmount || numericAmount <= 0) {
+      setPayDebtError('Nominal pembayaran harus lebih dari Rp 0.')
+      return
+    }
+
+    if (numericAmount > maxPayableDebt) {
+      setPayDebtError('Nominal pembayaran tidak boleh melebihi sisa tagihan.')
+      return
+    }
+
+    setPayDebtSaving(true)
+    setPayDebtError('')
+
+    try {
+      const payload = {
+        amount: numericAmount,
+      }
+
+      if (payingTransaction) {
+        payload.transaction_id = payingTransaction.id
+      }
+
+      const response = await api.post(
+        `/customers/${payingCustomer.id}/pay-debt`,
+        payload
+      )
+
+      const updatedCustomer = getPayload(response)
+
+      setNotice(
+        `Pembayaran piutang sebesar ${formatCurrency(numericAmount)} untuk ${payingCustomer.name} berhasil dicatat.`
+      )
+
+      setPayDebtOpen(false)
+      setPayingCustomer(null)
+      setPayingTransaction(null)
+      setPayDebtAmount('')
+
+      if (detailOpen && selectedCustomer?.id === updatedCustomer?.id) {
+        setSelectedCustomer(updatedCustomer)
+      }
+
+      await loadCustomers()
+    } catch (err) {
+      setPayDebtError(
+        getErrorMessage(
+          err,
+          'Pembayaran piutang gagal diproses.'
+        )
+      )
+    } finally {
+      setPayDebtSaving(false)
+    }
+  }
+
+  // =========================================
   // TAMPILAN HALAMAN
   // =========================================
 
@@ -457,6 +558,16 @@ export default function CustomerPage({ search = '' }) {
 
                       <td>
                         <div className="customer-actions">
+
+                          {debt > 0 && (
+                            <button
+                              type="button"
+                              className="small-action primary-button"
+                              onClick={() => openPayDebtModal(customer)}
+                            >
+                              Bayar Piutang
+                            </button>
+                          )}
 
                           <button
                             type="button"
@@ -755,9 +866,20 @@ export default function CustomerPage({ search = '' }) {
                       </p>
                     </div>
 
-                    <span className="count-pill">
-                      {selectedCustomer.transactions?.length || 0} transaksi
-                    </span>
+                    <div className="customer-actions">
+                      {Number(selectedCustomer.total_debt || 0) > 0 && (
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={() => openPayDebtModal(selectedCustomer)}
+                        >
+                          Bayar Semua Piutang
+                        </button>
+                      )}
+                      <span className="count-pill">
+                        {selectedCustomer.transactions?.length || 0} transaksi
+                      </span>
+                    </div>
                   </div>
 
                   <div className="table-scroll">
@@ -770,7 +892,10 @@ export default function CustomerPage({ search = '' }) {
                           <th>Tanggal</th>
                           <th>Metode Pembayaran</th>
                           <th>Total Transaksi</th>
+                          <th>Sudah Dibayar</th>
+                          <th>Sisa Tagihan</th>
                           <th>Status</th>
+                          <th>Aksi</th>
                         </tr>
                       </thead>
 
@@ -778,47 +903,78 @@ export default function CustomerPage({ search = '' }) {
 
                         {selectedCustomer.transactions?.length > 0 ? (
 
-                          selectedCustomer.transactions.map((transaction) => (
+                          selectedCustomer.transactions.map((transaction) => {
+                            const txTotal = Number(transaction.total_price || 0)
+                            const txPaid = Number(transaction.pay_amount || 0)
+                            const txRemaining =
+                              transaction.payment_status === 'paid'
+                                ? 0
+                                : Math.max(0, txTotal - txPaid)
 
-                            <tr key={transaction.id}>
+                            return (
+                              <tr key={transaction.id}>
 
-                              <td className="mono-cell">
-                                {transaction.invoice_number ||
-                                  `TRX-${transaction.id}`}
-                              </td>
+                                <td className="mono-cell">
+                                  {transaction.invoice_number ||
+                                    `TRX-${transaction.id}`}
+                                </td>
 
-                              <td>
-                                {formatDate(transaction.created_at, true)}
-                              </td>
+                                <td>
+                                  {formatDate(transaction.created_at, true)}
+                                </td>
 
-                              <td>
-                                {paymentLabel(transaction.payment_method)}
-                              </td>
+                                <td>
+                                  {paymentLabel(transaction.payment_method)}
+                                </td>
 
-                              <td className="money-cell">
-                                {formatCurrency(transaction.total_price)}
-                              </td>
+                                <td className="money-cell">
+                                  {formatCurrency(txTotal)}
+                                </td>
 
-                              <td>
-                                {transaction.payment_status === 'paid' ? (
-                                  <span className="status-pill status-success">
-                                    Lunas
-                                  </span>
-                                ) : (
-                                  <span className="status-pill status-warning">
-                                    Belum Lunas
-                                  </span>
-                                )}
-                              </td>
+                                <td className="money-cell">
+                                  {formatCurrency(txPaid)}
+                                </td>
 
-                            </tr>
+                                <td className="money-cell">
+                                  {formatCurrency(txRemaining)}
+                                </td>
 
-                          ))
+                                <td>
+                                  {transaction.payment_status === 'paid' ? (
+                                    <span className="status-pill status-success">
+                                      Lunas
+                                    </span>
+                                  ) : (
+                                    <span className="status-pill status-warning">
+                                      Belum Lunas
+                                    </span>
+                                  )}
+                                </td>
+
+                                <td>
+                                  {transaction.payment_status !== 'paid' ? (
+                                    <button
+                                      type="button"
+                                      className="small-action primary-button"
+                                      onClick={() =>
+                                        openPayDebtModal(selectedCustomer, transaction)
+                                      }
+                                    >
+                                      Bayar
+                                    </button>
+                                  ) : (
+                                    <span>—</span>
+                                  )}
+                                </td>
+
+                              </tr>
+                            )
+                          })
 
                         ) : (
 
                           <tr>
-                            <td colSpan="5" className="table-message">
+                            <td colSpan="8" className="table-message">
                               Belum ada riwayat transaksi.
                             </td>
                           </tr>
@@ -846,6 +1002,135 @@ export default function CustomerPage({ search = '' }) {
               </div>
 
             </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+      {/* =====================================
+          MODAL BAYAR PIUTANG CUSTOMER
+      ====================================== */}
+
+      {payDebtOpen && payingCustomer && (
+
+        <div className="modal-backdrop">
+
+          <div className="modal-card">
+
+            <div className="modal-header">
+
+              <div>
+                <h2>Bayar Piutang Pelanggan</h2>
+                <p>
+                  {payingTransaction
+                    ? `Pelunasan untuk Invoice ${payingTransaction.invoice_number || `TRX-${payingTransaction.id}`}`
+                    : `Pelunasan piutang untuk ${payingCustomer.name}`}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="icon-button"
+                onClick={() => setPayDebtOpen(false)}
+                disabled={payDebtSaving}
+              >
+                ×
+              </button>
+
+            </div>
+
+            <form
+              className="modal-form"
+              onSubmit={handlePayDebtSubmit}
+            >
+
+              {payDebtError && (
+                <div className="form-error">
+                  <Icon name="warning" size={15} />
+                  {payDebtError}
+                </div>
+              )}
+
+              <div className="customer-detail-grid">
+                <div>
+                  <span>Nama Pelanggan</span>
+                  <strong>{payingCustomer.name}</strong>
+                </div>
+
+                <div>
+                  <span>
+                    {payingTransaction ? 'Sisa Tagihan Invoice' : 'Total Piutang Saat Ini'}
+                  </span>
+                  <strong className="customer-debt-total">
+                    {formatCurrency(maxPayableDebt)}
+                  </strong>
+                </div>
+              </div>
+
+              <label>
+                Nominal Pembayaran (Rp)
+
+                <input
+                  type="number"
+                  min="1"
+                  max={maxPayableDebt}
+                  step="1"
+                  placeholder="Masukkan nominal yang dibayarkan"
+                  value={payDebtAmount}
+                  onChange={(event) => setPayDebtAmount(event.target.value)}
+                  required
+                  autoFocus
+                />
+              </label>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.875rem' }}>
+                <span>
+                  Sisa setelah dibayar:{' '}
+                  <strong>
+                    {formatCurrency(Math.max(0, maxPayableDebt - Number(payDebtAmount || 0)))}
+                  </strong>
+                </span>
+
+                <button
+                  type="button"
+                  className="small-action"
+                  onClick={() => setPayDebtAmount(String(maxPayableDebt))}
+                >
+                  Bayar Lunas Penuh
+                </button>
+              </div>
+
+              <div className="modal-actions">
+
+                <button
+                  type="button"
+                  className="outline-button"
+                  onClick={() => setPayDebtOpen(false)}
+                  disabled={payDebtSaving}
+                >
+                  Batal
+                </button>
+
+                <button
+                  type="submit"
+                  className="primary-button"
+                  disabled={payDebtSaving}
+                >
+                  {payDebtSaving ? (
+                    <>
+                      <span className="button-spinner" />
+                      Memproses...
+                    </>
+                  ) : (
+                    'Simpan Pembayaran'
+                  )}
+                </button>
+
+              </div>
+
+            </form>
 
           </div>
 

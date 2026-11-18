@@ -33,11 +33,6 @@ Route::post('login', [AuthController::class, 'login'])->middleware('throttle:5,1
 |--------------------------------------------------------------------------
 | Authenticated routes
 |--------------------------------------------------------------------------
-|
-| Role mapping for the current database schema:
-| - admin = Owner (terminology used by SRS v0.2)
-| - kasir = Kasir
-|
 */
 Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
     Route::get('me', [AuthController::class, 'me']);
@@ -54,6 +49,11 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
     Route::get('products', [ProductController::class, 'index']);
     Route::get('products/{id}', [ProductController::class, 'show']);
     Route::post('assistant/chat', [ProductController::class, 'chat']);
+
+    // Owner dan Kasir dapat melihat daftar pelanggan (untuk pilihan Kasbon di POS).
+    Route::get('customers', [CustomerController::class, 'index']);
+    Route::get('customers/{customer}', [CustomerController::class, 'show']);
+    Route::post('customers/{id}/pay-debt', [CustomerController::class, 'payDebt'])->whereNumber('id');
 
     // Cashier and Owner may process sales. The controller scopes Cashier history to their own sales.
     Route::get('transactions', [TransactionController::class, 'index']);
@@ -127,7 +127,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
         Route::patch('suppliers/{id}', [SupplierController::class, 'update']);
         Route::delete('suppliers/{id}', [SupplierController::class, 'destroy']);
 
-        Route::apiResource('customers', CustomerController::class);
+        // Tambah, edit, dan hapus pelanggan khusus Owner
+        Route::apiResource('customers', CustomerController::class)->except(['index', 'show']);
         Route::apiResource('expenses', ExpenseController::class);
         Route::apiResource('shifts', ShiftController::class);
         Route::apiResource('discounts', DiscountController::class);

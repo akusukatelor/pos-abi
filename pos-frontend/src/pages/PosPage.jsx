@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, makeIdempotencyKey, unwrapList } from '../api/client.js'
 import Icon from '../components/Icon.jsx'
 import Modal from '../components/Modal.jsx'
-import { formatCurrency, formatDate, formatNumber } from '../utils/format.js'
+import { formatCurrency, formatDate, formatNumber, paymentLabel } from '../utils/format.js'
 
 const colorSet = ['tile-sand', 'tile-peach', 'tile-blue', 'tile-green', 'tile-lilac', 'tile-yellow']
 
@@ -103,18 +103,41 @@ function ServiceRecordModal({ service, onClose, onSaved }) {
 function ReceiptModal({ transaction, onClose }) {
   if (!transaction) return null
   const details = transaction.details || []
+  const isDebt = transaction.payment_method === 'debt'
+  const remainingDebt = Math.max(0, Number(transaction.total_price || 0) - Number(transaction.pay_amount || 0))
+
   return (
-    <Modal title="Transaksi berhasil" subtitle="Pembayaran telah dicatat dan stok telah diperbarui." onClose={onClose} className="receipt-modal">
+    <Modal
+      title="Transaksi berhasil"
+      subtitle={isDebt ? 'Piutang pelanggan telah dicatat dan stok telah diperbarui.' : 'Pembayaran telah dicatat dan stok telah diperbarui.'}
+      onClose={onClose}
+      className="receipt-modal"
+    >
       <div className="receipt-paper" id="printable-receipt">
         <div className="receipt-brand"><div className="brand-mark brand-logo"><img src="/logo_abicell.png" alt="Logo AbiCell" /></div><strong>LARIS - ABICELL</strong><span>Toko Kelontong &amp; Jasa Digital</span></div>
         <div className="receipt-meta"><span>No. {transaction.invoice_number}</span><span>{formatDate(transaction.created_at, true)}</span></div>
+        {transaction.customer?.name && (
+          <div className="receipt-line">
+            <span>Pelanggan</span>
+            <b>{transaction.customer.name}</b>
+          </div>
+        )}
         <div className="receipt-divider" />
         {details.map((detail) => <div className="receipt-line" key={detail.id}><span>{detail.product?.name || `Produk #${detail.product_id}`}<small>{detail.quantity} × {formatCurrency(detail.price)}</small></span><b>{formatCurrency(detail.subtotal)}</b></div>)}
         <div className="receipt-divider" />
         <div className="receipt-total"><span>Total</span><strong>{formatCurrency(transaction.total_price)}</strong></div>
-        <div className="receipt-line"><span>Bayar ({transaction.payment_method === 'cash' ? 'Tunai' : 'QRIS GoPay'})</span><b>{formatCurrency(transaction.pay_amount)}</b></div>
+        <div className="receipt-line">
+          <span>Bayar ({paymentLabel(transaction.payment_method)})</span>
+          <b>{formatCurrency(transaction.pay_amount)}</b>
+        </div>
         {transaction.payment_method === 'cash' && <div className="receipt-line"><span>Kembalian</span><b>{formatCurrency(transaction.change_amount)}</b></div>}
         {transaction.payment_method === 'qris_gopay' && transaction.payment_reference && <div className="receipt-line"><span>Referensi QRIS</span><b>{transaction.payment_reference}</b></div>}
+        {isDebt && (
+          <div className="receipt-line">
+            <span>Sisa Piutang (Kasbon)</span>
+            <b>{formatCurrency(remainingDebt)}</b>
+          </div>
+        )}
         <p className="receipt-thanks">Terima kasih telah berbelanja.</p>
       </div>
       <div className="modal-actions receipt-actions"><button type="button" className="secondary-button" onClick={onClose}>Tutup</button><button type="button" className="primary-button" onClick={() => window.print()}><Icon name="printer" size={16} /> Cetak struk</button></div>
@@ -123,7 +146,6 @@ function ReceiptModal({ transaction, onClose }) {
 }
 
 export default function PosPage({ user, globalSearch = '', onToast }) {
-  const isOwner = user?.role === 'admin'
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [customers, setCustomers] = useState([])
@@ -166,7 +188,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
         api.get('/products'),
         api.get('/categories'),
         api.get('/service-types'),
-        isOwner ? api.get('/customers') : Promise.resolve({ data: [] }),
+        api.get('/customers').catch(() => ({ data: [] })),
       ])
       setProducts(unwrapList(productResponse))
       setCategories(unwrapList(categoryResponse))
@@ -177,7 +199,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
     } finally {
       setLoading(false)
     }
-  }, [isOwner])
+  }, [])
 
   useEffect(() => { void Promise.resolve().then(loadCatalog) }, [loadCatalog])
 
@@ -224,13 +246,34 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
     return !term || [service.name, service.description].join(' ').toLowerCase().includes(term)
   }), [services, search])
 
+  const selectedCustomer = useMemo(
+    () => customers.find((customer) => String(customer.id) === String(selectedCustomerId)) || null,
+    [customers, selectedCustomerId]
+  )
+
   const total = cart.reduce((sum, item) => sum + Number(item.sell_price || 0) * item.quantity, 0)
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0)
-  const numericPayAmount = paymentMethod === 'qris_gopay' ? total : Number(payAmount || total)
-  const change = Math.max(0, numericPayAmount - total)
-  const canCheckout = cart.length > 0 && !checkoutLoading && (
-    paymentMethod === 'cash' ? numericPayAmount >= total : qrisConfirmed
-  )
+
+  const numericPayAmount =
+    paymentMethod === 'qris_gopay'
+      ? total
+      : paymentMethod === 'debt'
+      ? Number(payAmount || 0)
+      : Number(payAmount || total)
+
+  const change = paymentMethod === 'cash' ? Math.max(0, numericPayAmount - total) : 0
+  const debtToRecord = paymentMethod === 'debt' ? Math.max(0, total - numericPayAmount) : 0
+
+  const canCheckout =
+    cart.length > 0 &&
+    !checkoutLoading &&
+    (paymentMethod === 'cash'
+      ? numericPayAmount >= total
+      : paymentMethod === 'qris_gopay'
+      ? qrisConfirmed
+      : paymentMethod === 'debt'
+      ? Boolean(selectedCustomerId) && numericPayAmount >= 0 && numericPayAmount < total
+      : false)
 
   const checkout = async () => {
     if (!canCheckout) return
@@ -250,7 +293,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
         payload.payment_reference = paymentReference.trim() || null
       }
       const response = await api.post('/transactions', payload)
-      setReceipt(response.data)
+      setReceipt(response?.data?.data ?? response?.data ?? response)
       checkoutKeyRef.current = null
       setCart([])
       setSelectedCustomerId('')
@@ -260,7 +303,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
       setPaymentMethod('cash')
       await loadCatalog()
     } catch (err) {
-      setError(err.message || 'Checkout gagal diproses.')
+      setError(err?.response?.data?.message || err.message || 'Checkout gagal diproses.')
     } finally {
       setCheckoutLoading(false)
     }
@@ -328,23 +371,97 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
 
           <section className="panel payment-panel">
             <div className="payment-title"><h2>Ringkasan Pembayaran</h2><span>Total pembayaran</span><strong className="payment-grand-total">{formatCurrency(total)}</strong></div>
-            {isOwner && (
-              <label className="customer-select">
-                Pelanggan
-                <select value={selectedCustomerId} onChange={(event) => setSelectedCustomerId(event.target.value)}>
-                  <option value="">Pelanggan umum</option>
-                  {customers.map((customer) => <option key={customer.id} value={customer.id}>{customer.name}{customer.phone ? ` · ${customer.phone}` : ''}</option>)}
-                </select>
-              </label>
-            )}
+
+            <label className="customer-select">
+              <span>
+                Pelanggan {paymentMethod === 'debt' && <strong style={{ color: '#dc2626' }}>*Wajib dipilih</strong>}
+              </span>
+              <select
+                value={selectedCustomerId}
+                onChange={(event) => {
+                  checkoutKeyRef.current = null
+                  setSelectedCustomerId(event.target.value)
+                }}
+              >
+                <option value="">
+                  {paymentMethod === 'debt' ? '-- Pilih pelanggan untuk kasbon --' : 'Pelanggan umum'}
+                </option>
+                {customers.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}
+                    {customer.phone ? ` · ${customer.phone}` : ''}
+                    {Number(customer.total_debt || 0) > 0 ? ` (Piutang: ${formatCurrency(customer.total_debt)})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <div className="payment-method-label">Metode pembayaran</div>
             <div className="payment-methods">
-              <button type="button" className={paymentMethod === 'cash' ? 'payment-option active' : 'payment-option'} onClick={() => { checkoutKeyRef.current = null; setPaymentMethod('cash'); setQrisConfirmed(false) }}>Tunai</button>
-              <button type="button" className={paymentMethod === 'qris_gopay' ? 'payment-option active' : 'payment-option'} onClick={() => { checkoutKeyRef.current = null; setPaymentMethod('qris_gopay'); setPayAmount(String(total)); setQrisConfirmed(false) }}>QRIS GoPay</button>
+              <button
+                type="button"
+                className={paymentMethod === 'cash' ? 'payment-option active' : 'payment-option'}
+                onClick={() => {
+                  checkoutKeyRef.current = null
+                  setPaymentMethod('cash')
+                  setPayAmount('')
+                  setQrisConfirmed(false)
+                }}
+              >
+                Tunai
+              </button>
+              <button
+                type="button"
+                className={paymentMethod === 'qris_gopay' ? 'payment-option active' : 'payment-option'}
+                onClick={() => {
+                  checkoutKeyRef.current = null
+                  setPaymentMethod('qris_gopay')
+                  setPayAmount(String(total))
+                  setQrisConfirmed(false)
+                }}
+              >
+                QRIS GoPay
+              </button>
+              <button
+                type="button"
+                className={paymentMethod === 'debt' ? 'payment-option active' : 'payment-option'}
+                onClick={() => {
+                  checkoutKeyRef.current = null
+                  setPaymentMethod('debt')
+                  setPayAmount('0')
+                  setQrisConfirmed(false)
+                }}
+              >
+                Kasbon
+              </button>
             </div>
-            {paymentMethod === 'cash' ? (
-              <div className="cash-input-row"><label htmlFor="cash-received">Uang diterima</label><div className="currency-input"><span>Rp</span><input id="cash-received" type="number" min={total} step="1" value={payAmount} onChange={(event) => { checkoutKeyRef.current = null; setPayAmount(event.target.value) }} placeholder={String(total)} /></div><div className="change-row"><span>Kembalian</span><strong>{formatCurrency(change)}</strong></div></div>
-            ) : (
+
+            {paymentMethod === 'cash' && (
+              <div className="cash-input-row">
+                <label htmlFor="cash-received">Uang diterima</label>
+                <div className="currency-input">
+                  <span>Rp</span>
+                  <input
+                    id="cash-received"
+                    type="number"
+                    min={total}
+                    step="1"
+                    value={payAmount}
+                    onChange={(event) => {
+                      checkoutKeyRef.current = null
+                      setPayAmount(event.target.value)
+                    }}
+                    placeholder={String(total)}
+                  />
+                </div>
+                <div className="change-row">
+                  <span>Kembalian</span>
+                  <strong>{formatCurrency(change)}</strong>
+                </div>
+              </div>
+            )}
+
+            {paymentMethod === 'qris_gopay' && (
               <div className="qris-confirm-box">
                 <button type="button" className="qris-preview-button" onClick={() => setQrisPreviewOpen(true)} aria-label="Perbesar kode QRIS">
                   <img className="qris-image" src="/qris.jpeg" alt="Kode pembayaran QRIS Toko Abi 6839" />
@@ -354,12 +471,56 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
                 <label className="qris-check"><input type="checkbox" checked={qrisConfirmed} onChange={(event) => { checkoutKeyRef.current = null; setQrisConfirmed(event.target.checked) }} /><span>Saya sudah memeriksa GoPay Merchant dan memastikan pembayaran diterima sesuai nominal.</span></label>
               </div>
             )}
+
+            {paymentMethod === 'debt' && (
+              <div className="cash-input-row">
+                <label htmlFor="debt-dp">Dibayar sekarang / DP (opsional)</label>
+                <div className="currency-input">
+                  <span>Rp</span>
+                  <input
+                    id="debt-dp"
+                    type="number"
+                    min="0"
+                    max={Math.max(0, total - 1)}
+                    step="1"
+                    value={payAmount}
+                    onChange={(event) => {
+                      checkoutKeyRef.current = null
+                      setPayAmount(event.target.value)
+                    }}
+                    placeholder="0"
+                  />
+                </div>
+                <div className="change-row">
+                  <span>Piutang dicatat</span>
+                  <strong>{formatCurrency(debtToRecord)}</strong>
+                </div>
+                {!selectedCustomer ? (
+                  <p className="payment-hint" style={{ color: '#dc2626', margin: 0 }}>
+                    Pilih pelanggan pada dropdown di atas terlebih dahulu untuk mengaktifkan tombol kasbon.
+                  </p>
+                ) : (
+                  <p className="payment-hint" style={{ margin: 0 }}>
+                    Total piutang <strong>{selectedCustomer.name}</strong> akan menjadi{' '}
+                    <strong>{formatCurrency(Number(selectedCustomer.total_debt || 0) + debtToRecord)}</strong>.
+                  </p>
+                )}
+              </div>
+            )}
+
             <button type="button" className="checkout-button" onClick={checkout} disabled={!canCheckout}>
               {checkoutLoading ? <span className="button-spinner" /> : null}
-              {checkoutLoading ? 'Memproses...' : paymentMethod === 'qris_gopay' ? 'Konfirmasi QRIS & Selesaikan' : 'Proses Pembayaran'}
+              {checkoutLoading
+                ? 'Memproses...'
+                : paymentMethod === 'qris_gopay'
+                ? 'Konfirmasi QRIS & Selesaikan'
+                : paymentMethod === 'debt'
+                ? 'Catat Kasbon Pelanggan'
+                : 'Proses Pembayaran'}
               {!checkoutLoading && <span>→</span>}
             </button>
             {paymentMethod === 'qris_gopay' && <p className="payment-hint">QRIS dicatat lunas setelah verifikasi manual oleh Kasir.</p>}
+            {paymentMethod === 'debt' && <p className="payment-hint">Transaksi akan berstatus Belum Lunas dan menambah piutang di halaman Customer Management.</p>}
           </section>
         </aside>
       </div>

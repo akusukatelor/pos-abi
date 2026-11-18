@@ -7,7 +7,7 @@ const navigation = [
   { id: 'dashboard', label: 'Dashboard', icon: 'dashboard', ownerOnly: true },
   { id: 'pos', label: 'Point of Sale (POS)', icon: 'pos' },
   { id: 'inventory', label: 'Inventory', icon: 'inventory' },
-  { id: 'customers', label: 'Customer', icon: 'supplier', ownerOnly: true },
+  { id: 'customers', label: 'Customer', icon: 'wallet', ownerOnly: true },
   { id: 'suppliers', label: 'Supplier', icon: 'supplier' },
   { id: 'services', label: 'Digital Services', icon: 'services' },
   { id: 'reports', label: 'Reports', icon: 'reports', ownerOnly: true },

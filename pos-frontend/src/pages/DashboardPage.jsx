@@ -60,21 +60,36 @@ function TrendChart({ rows }) {
 function PaymentChart({ rows }) {
   const cash = Number(rows.find((row) => row.payment_method === 'cash')?.omzet || 0)
   const qris = Number(rows.find((row) => row.payment_method === 'qris_gopay')?.omzet || 0)
-  const max = Math.max(cash, qris, 1)
-  const total = cash + qris
+  const debt = Number(rows.find((row) => row.payment_method === 'debt')?.omzet || 0)
+  const max = Math.max(cash, qris, debt, 1)
+  const total = cash + qris + debt
   const barHeight = 102
+
   return (
     <div className="payment-chart">
       <div className="chart-legend">
         <span><i className="legend-swatch legend-cash" /> Tunai</span>
         <span><i className="legend-swatch legend-qris" /> QRIS GoPay</span>
+        <span><i className="legend-swatch legend-debt" style={{ backgroundColor: '#f59e0b' }} /> Kasbon</span>
       </div>
-      {total === 0 ? <div className="chart-empty chart-empty-small">Belum ada transaksi berbayar.</div> : (
+      {total === 0 ? <div className="chart-empty chart-empty-small">Belum ada transaksi tercatat.</div> : (
         <div className="payment-bars">
-          {[{ label: 'Tunai', value: cash, className: 'cash-bar' }, { label: 'QRIS', value: qris, className: 'qris-bar' }].map((item) => (
+          {[
+            { label: 'Tunai', value: cash, className: 'cash-bar' },
+            { label: 'QRIS', value: qris, className: 'qris-bar' },
+            { label: 'Kasbon', value: debt, className: 'debt-bar', style: { backgroundColor: '#f59e0b' } },
+          ].map((item) => (
             <div className="payment-bar-group" key={item.label}>
               <div className="payment-bar-value">{formatCurrency(item.value)}</div>
-              <div className="payment-bar-track"><div className={`payment-bar ${item.className}`} style={{ height: `${Math.max(3, item.value / max * barHeight)}px` }} /></div>
+              <div className="payment-bar-track">
+                <div
+                  className={`payment-bar ${item.className}`}
+                  style={{
+                    height: `${Math.max(3, (item.value / max) * barHeight)}px`,
+                    ...(item.style || {}),
+                  }}
+                />
+              </div>
               <span>{item.label}</span>
             </div>
           ))}
@@ -85,28 +100,37 @@ function PaymentChart({ rows }) {
 }
 
 function transactionRows(transactions, services) {
-  const salesRows = transactions.map((item) => ({
-    id: item.id,
-    code: item.invoice_number || `TRX-${item.id}`,
-    date: item.created_at,
-    type: 'Barang',
-    detail: item.details?.map((detail) => detail.product?.name).filter(Boolean).join(', ') || 'Penjualan barang',
-    method: paymentLabel(item.payment_method),
-    total: Number(item.total_price || 0),
-    status: item.payment_status === 'paid' ? 'Sukses' : 'Belum lunas',
-    sortDate: new Date(item.created_at || 0).getTime(),
-  }))
+  const salesRows = transactions.map((item) => {
+    const productNames = item.details?.map((detail) => detail.product?.name).filter(Boolean).join(', ') || 'Penjualan barang'
+    const customerName = item.customer?.name || ''
+
+    return {
+      id: item.id,
+      code: item.invoice_number || `TRX-${item.id}`,
+      date: item.created_at,
+      type: 'Barang',
+      detail: customerName ? `${productNames} (${customerName})` : productNames,
+      customerName,
+      method: paymentLabel(item.payment_method),
+      total: Number(item.total_price || 0),
+      status: item.payment_status === 'paid' ? 'Sukses' : 'Belum lunas',
+      sortDate: new Date(item.created_at || 0).getTime(),
+    }
+  })
+
   const serviceRows = services.map((item) => ({
     id: `service-${item.id}`,
     code: item.reference_number || `JASA-${item.id}`,
     date: item.service_at,
     type: 'Jasa',
     detail: item.service_type?.name || 'Layanan digital',
+    customerName: '',
     method: 'Layanan digital',
     total: item.margin_amount == null ? null : Number(item.margin_amount),
     status: item.status === 'completed' ? 'Selesai' : 'Dibatalkan',
     sortDate: new Date(item.service_at || 0).getTime(),
   }))
+
   return [...salesRows, ...serviceRows].sort((a, b) => b.sortDate - a.sortDate).slice(0, 7)
 }
 
@@ -114,6 +138,7 @@ export default function DashboardPage({ search = '', onNavigate }) {
   const [dashboard, setDashboard] = useState(null)
   const [transactions, setTransactions] = useState([])
   const [services, setServices] = useState([])
+  const [customers, setCustomers] = useState([])
   const [from, setFrom] = useState(firstDayOfMonthInput())
   const [to, setTo] = useState(todayInput())
   const [loading, setLoading] = useState(true)
@@ -123,14 +148,16 @@ export default function DashboardPage({ search = '', onNavigate }) {
     setLoading(true)
     setError('')
     try {
-      const [dashboardResponse, transactionResponse, serviceResponse] = await Promise.all([
+      const [dashboardResponse, transactionResponse, serviceResponse, customerResponse] = await Promise.all([
         api.get(`/dashboard/owner?from=${from}&to=${to}`),
         api.get('/transactions'),
         api.get('/service-transactions'),
+        api.get('/customers').catch(() => ({ data: [] })),
       ])
       setDashboard(dashboardResponse.data)
       setTransactions(unwrapList(transactionResponse))
       setServices(unwrapList(serviceResponse))
+      setCustomers(unwrapList(customerResponse))
     } catch (err) {
       setError(err.message || 'Data dashboard tidak dapat dimuat.')
     } finally {
@@ -144,9 +171,43 @@ export default function DashboardPage({ search = '', onNavigate }) {
   const sales = data.sales || {}
   const inventory = data.inventory || {}
   const serviceData = data.services || {}
+
+  const totalCustomerDebt = useMemo(
+    () => customers.reduce((sum, customer) => sum + Number(customer.total_debt || 0), 0),
+    [customers]
+  )
+
+  const customersWithDebtCount = useMemo(
+    () => customers.filter((customer) => Number(customer.total_debt || 0) > 0).length,
+    [customers]
+  )
+
+  // Jika backend belum mengirim breakdown 'debt', hitung fallback dari daftar transaksi periode terpilih
+  const paymentBreakdownRows = useMemo(() => {
+    const baseRows = Array.isArray(sales.payment_breakdown) ? [...sales.payment_breakdown] : []
+    const hasDebtRow = baseRows.some((row) => row.payment_method === 'debt')
+
+    if (!hasDebtRow) {
+      const fromTime = from ? new Date(`${from}T00:00:00`).getTime() : 0
+      const toTime = to ? new Date(`${to}T23:59:59`).getTime() : Number.MAX_SAFE_INTEGER
+
+      const debtTotal = transactions
+        .filter((tx) => {
+          if (tx.payment_method !== 'debt') return false
+          const txTime = new Date(tx.created_at || 0).getTime()
+          return txTime >= fromTime && txTime <= toTime
+        })
+        .reduce((sum, tx) => sum + Number(tx.total_price || 0), 0)
+
+      baseRows.push({ payment_method: 'debt', omzet: debtTotal })
+    }
+
+    return baseRows
+  }, [sales.payment_breakdown, transactions, from, to])
+
   const recent = useMemo(() => transactionRows(transactions, services).filter((row) => {
     const term = search.trim().toLowerCase()
-    return !term || [row.code, row.detail, row.type, row.method].join(' ').toLowerCase().includes(term)
+    return !term || [row.code, row.detail, row.customerName, row.type, row.method, row.status].join(' ').toLowerCase().includes(term)
   }), [transactions, services, search])
 
   return (
@@ -169,6 +230,7 @@ export default function DashboardPage({ search = '', onNavigate }) {
       <div className="kpi-grid">
         <KpiCard label="Total Penjualan Barang" value={loading ? 'Memuat…' : formatCurrency(sales.omzet_barang)} note={`${sales.transaction_count || 0} transaksi berbayar`} icon="wallet" tone="green" />
         <KpiCard label="Total Transaksi" value={loading ? '—' : (sales.transaction_count || 0).toLocaleString('id-ID')} note={`${serviceData.completed_count || 0} transaksi layanan selesai`} icon="receipt" tone="blue" />
+        <KpiCard label="Total Piutang Pelanggan" value={loading ? 'Memuat…' : formatCurrency(totalCustomerDebt)} note={`${customersWithDebtCount} pelanggan memiliki kasbon`} icon="users" tone="orange" onClick={() => onNavigate('customers')} />
         <KpiCard label="Stok Perlu Ditinjau" value={loading ? '—' : `${inventory.needs_restock_count || 0} item`} note={`${inventory.insufficient_data_count || 0} item belum cukup data`} icon="box" tone="orange" onClick={() => onNavigate('settings')} />
         <KpiCard label="Margin Layanan Terverifikasi" value={loading ? 'Memuat…' : formatCurrency(serviceData.verified_margin_total)} note={`${serviceData.verified_margin_count || 0} layanan diverifikasi`} icon="chart" tone="purple" onClick={() => onNavigate('services')} />
       </div>
@@ -182,9 +244,9 @@ export default function DashboardPage({ search = '', onNavigate }) {
         </section>
         <section className="panel chart-panel">
           <div className="panel-heading">
-            <div><h2>Metode Pembayaran</h2><p>Perbandingan omzet tunai dan QRIS GoPay.</p></div>
+            <div><h2>Metode Pembayaran</h2><p>Perbandingan transaksi Tunai, QRIS GoPay, dan Kasbon.</p></div>
           </div>
-          {loading ? <div className="skeleton-chart" /> : <PaymentChart rows={sales.payment_breakdown || []} />}
+          {loading ? <div className="skeleton-chart" /> : <PaymentChart rows={paymentBreakdownRows} />}
         </section>
       </div>
 
@@ -205,7 +267,19 @@ export default function DashboardPage({ search = '', onNavigate }) {
                   <td className="item-cell" title={row.detail}>{row.detail}</td>
                   <td>{row.method}</td>
                   <td className="money-cell">{row.type === 'Jasa' && row.total == null ? 'Belum diketahui' : formatCurrency(row.total)}</td>
-                  <td><span className={`status-pill ${row.status === 'Sukses' || row.status === 'Selesai' ? 'status-success' : 'status-neutral'}`}>{row.status}</span></td>
+                  <td>
+                    <span
+                      className={`status-pill ${
+                        row.status === 'Sukses' || row.status === 'Selesai'
+                          ? 'status-success'
+                          : row.status === 'Belum lunas'
+                          ? 'status-warning'
+                          : 'status-neutral'
+                      }`}
+                    >
+                      {row.status}
+                    </span>
+                  </td>
                 </tr>
               )) : <tr><td colSpan="7" className="table-message">Belum ada transaksi pada akun ini.</td></tr>}
             </tbody>
