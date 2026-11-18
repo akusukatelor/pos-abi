@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage.jsx'
 import DashboardPage from './pages/DashboardPage.jsx'
 import PosPage from './pages/PosPage.jsx'
 import InventoryPage from './pages/InventoryPage.jsx'
+import CustomerPage from './pages/CustomerPage.jsx'
 import SuppliersPage from './pages/SuppliersPage.jsx'
 import DigitalServicesPage from './pages/DigitalServicesPage.jsx'
 import ReportsPage from './pages/ReportsPage.jsx'
@@ -90,7 +91,10 @@ export default function App() {
       setPage('pos')
       return
     }
-    if (['reports', 'management', 'settings'].includes(nextPage) && user?.role !== 'admin') return
+    if (
+  ['reports', 'management', 'settings', 'customers'].includes(nextPage) &&
+  user?.role !== 'admin'
+) return
     setGlobalSearch('')
     setPage(nextPage)
   }
@@ -102,34 +106,81 @@ export default function App() {
   if (!token || !user) return <LoginPage onLogin={login} />
 
   let content
-  switch (page) {
-    case 'dashboard':
-      content = <DashboardPage search={globalSearch} onNavigate={navigate} />
-      break
-    case 'pos':
-      content = <PosPage user={user} globalSearch={globalSearch} onToast={showToast} />
-      break
-    case 'inventory':
-      content = <InventoryPage search={globalSearch} user={user} onToast={showToast} onNavigate={navigate} />
-      break
-    case 'suppliers':
-      content = <SuppliersPage search={globalSearch} />
-      break
-    case 'services':
-      content = <DigitalServicesPage user={user} search={globalSearch} onToast={showToast} />
-      break
-    case 'reports':
-      content = <ReportsPage />
-      break
-    case 'management':
-      content = <StoreManagementPage user={user} search={globalSearch} onToast={showToast} />
-      break
-    case 'settings':
-      content = <SettingsPage search={globalSearch} onToast={showToast} />
-      break
-    default:
-      content = <PosPage globalSearch={globalSearch} onToast={showToast} />
-  }
+ switch (page) {
+  case 'dashboard':
+    content = <DashboardPage search={globalSearch} onNavigate={navigate} />
+    break
+
+  case 'pos':
+    content = (
+      <PosPage
+        user={user}
+        globalSearch={globalSearch}
+        onToast={showToast}
+      />
+    )
+    break
+
+  case 'inventory':
+    content = (
+      <InventoryPage
+        search={globalSearch}
+        user={user}
+        onToast={showToast}
+        onNavigate={navigate}
+      />
+    )
+    break
+
+  case 'customers':
+    content = <CustomerPage search={globalSearch} />
+    break
+
+  case 'suppliers':
+    content = <SuppliersPage search={globalSearch} />
+    break
+
+  case 'services':
+    content = (
+      <DigitalServicesPage
+        user={user}
+        search={globalSearch}
+        onToast={showToast}
+      />
+    )
+    break
+
+  case 'reports':
+    content = <ReportsPage />
+    break
+
+  case 'management':
+    content = (
+      <StoreManagementPage
+        user={user}
+        search={globalSearch}
+        onToast={showToast}
+      />
+    )
+    break
+
+  case 'settings':
+    content = (
+      <SettingsPage
+        search={globalSearch}
+        onToast={showToast}
+      />
+    )
+    break
+
+  default:
+    content = (
+      <PosPage
+        globalSearch={globalSearch}
+        onToast={showToast}
+      />
+    )
+}
 
   return (
     <AppShell
