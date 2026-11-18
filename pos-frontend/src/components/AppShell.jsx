@@ -8,6 +8,7 @@ const navigation = [
   { id: 'pos', label: 'Point of Sale (POS)', icon: 'pos' },
   { id: 'inventory', label: 'Inventory', icon: 'inventory' },
   { id: 'customers', label: 'Customer', icon: 'wallet', ownerOnly: true },
+  { id: 'discounts', label: 'Promo & Diskon', icon: 'discount', ownerOnly: true },
   { id: 'suppliers', label: 'Supplier', icon: 'supplier' },
   { id: 'services', label: 'Digital Services', icon: 'services' },
   { id: 'reports', label: 'Reports', icon: 'reports', ownerOnly: true },
@@ -21,6 +22,7 @@ const titles = {
   inventory: 'Inventory',
   suppliers: 'Supplier',
   customers: 'Customer Management',
+  discounts: 'Manajemen Promo & Diskon',
   services: 'Digital Services',
   reports: 'Reports',
   management: 'Data Toko',
@@ -45,7 +47,7 @@ export default function AppShell({ user, page, onNavigate, onLogout, children, s
         <div className="brand">
           <div className="brand-mark brand-logo"><img src="/logo_abicell.png" alt="Logo AbiCell" /></div>
           <div className="brand-copy">
-            <span>Toko Kelontong &amp; Jasa Digital</span>
+            <span>Toko Kelontong & Jasa Digital</span>
             <strong>LARIS - ABICELL</strong>
           </div>
         </div>

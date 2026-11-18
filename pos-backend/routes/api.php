@@ -49,6 +49,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
     Route::get('products', [ProductController::class, 'index']);
     Route::get('products/{id}', [ProductController::class, 'show']);
     Route::post('assistant/chat', [ProductController::class, 'chat']);
+    Route::get('discounts', [DiscountController::class, 'index']);
+    Route::get('discounts/{id}', [DiscountController::class, 'show']);  
 
     // Owner dan Kasir dapat melihat daftar pelanggan (untuk pilihan Kasbon di POS).
     Route::get('customers', [CustomerController::class, 'index']);
@@ -127,11 +129,17 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
         Route::patch('suppliers/{id}', [SupplierController::class, 'update']);
         Route::delete('suppliers/{id}', [SupplierController::class, 'destroy']);
 
+        Route::post('discounts', [DiscountController::class, 'store']);
+        Route::put('discounts/{id}', [DiscountController::class, 'update']);
+        Route::patch('discounts/{id}', [DiscountController::class, 'update']);
+        Route::delete('discounts/{id}', [DiscountController::class, 'destroy']);
+
         // Tambah, edit, dan hapus pelanggan khusus Owner
         Route::apiResource('customers', CustomerController::class)->except(['index', 'show']);
         Route::apiResource('expenses', ExpenseController::class);
         Route::apiResource('shifts', ShiftController::class);
-        Route::apiResource('discounts', DiscountController::class);
+        
+        // HAPUS BARIS INI: Route::apiResource('discounts', DiscountController::class);
 
         Route::post('stock-movements', [StockMovementController::class, 'store']);
 

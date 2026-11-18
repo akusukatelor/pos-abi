@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, makeIdempotencyKey, unwrapList } from '../api/client.js'
 import Icon from '../components/Icon.jsx'
 import Modal from '../components/Modal.jsx'
-import { formatCurrency, formatDate, formatNumber, paymentLabel } from '../utils/format.js'
+import { formatCurrency, formatDate, formatNumber, paymentLabel, todayInput } from '../utils/format.js'
 
 const colorSet = ['tile-sand', 'tile-peach', 'tile-blue', 'tile-green', 'tile-lilac', 'tile-yellow']
 
@@ -104,7 +104,10 @@ function ReceiptModal({ transaction, onClose }) {
   if (!transaction) return null
   const details = transaction.details || []
   const isDebt = transaction.payment_method === 'debt'
-  const remainingDebt = Math.max(0, Number(transaction.total_price || 0) - Number(transaction.pay_amount || 0))
+  const discountAmount = Number(transaction.discount_amount || 0)
+  const totalPrice = Number(transaction.total_price || 0)
+  const subtotalPrice = totalPrice + discountAmount
+  const remainingDebt = Math.max(0, totalPrice - Number(transaction.pay_amount || 0))
 
   return (
     <Modal
@@ -114,7 +117,7 @@ function ReceiptModal({ transaction, onClose }) {
       className="receipt-modal"
     >
       <div className="receipt-paper" id="printable-receipt">
-        <div className="receipt-brand"><div className="brand-mark brand-logo"><img src="/logo_abicell.png" alt="Logo AbiCell" /></div><strong>LARIS - ABICELL</strong><span>Toko Kelontong &amp; Jasa Digital</span></div>
+        <div className="receipt-brand"><div className="brand-mark brand-logo"><img src="/logo_abicell.png" alt="Logo AbiCell" /></div><strong>LARIS - ABICELL</strong><span>Toko Kelontong & Jasa Digital</span></div>
         <div className="receipt-meta"><span>No. {transaction.invoice_number}</span><span>{formatDate(transaction.created_at, true)}</span></div>
         {transaction.customer?.name && (
           <div className="receipt-line">
@@ -125,7 +128,13 @@ function ReceiptModal({ transaction, onClose }) {
         <div className="receipt-divider" />
         {details.map((detail) => <div className="receipt-line" key={detail.id}><span>{detail.product?.name || `Produk #${detail.product_id}`}<small>{detail.quantity} × {formatCurrency(detail.price)}</small></span><b>{formatCurrency(detail.subtotal)}</b></div>)}
         <div className="receipt-divider" />
-        <div className="receipt-total"><span>Total</span><strong>{formatCurrency(transaction.total_price)}</strong></div>
+        {discountAmount > 0 && (
+          <>
+            <div className="receipt-line"><span>Subtotal</span><b>{formatCurrency(subtotalPrice)}</b></div>
+            <div className="receipt-line"><span>Diskon Promo</span><b>-{formatCurrency(discountAmount)}</b></div>
+          </>
+        )}
+        <div className="receipt-total"><span>Total</span><strong>{formatCurrency(totalPrice)}</strong></div>
         <div className="receipt-line">
           <span>Bayar ({paymentLabel(transaction.payment_method)})</span>
           <b>{formatCurrency(transaction.pay_amount)}</b>
@@ -149,7 +158,9 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [customers, setCustomers] = useState([])
+  const [discounts, setDiscounts] = useState([])
   const [selectedCustomerId, setSelectedCustomerId] = useState('')
+  const [selectedDiscountId, setSelectedDiscountId] = useState('')
   const [services, setServices] = useState([])
   const [cart, setCart] = useState([])
   const [tab, setTab] = useState('all')
@@ -184,16 +195,18 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
     setLoading(true)
     setError('')
     try {
-      const [productResponse, categoryResponse, serviceResponse, customerResponse] = await Promise.all([
+      const [productResponse, categoryResponse, serviceResponse, customerResponse, discountResponse] = await Promise.all([
         api.get('/products'),
         api.get('/categories'),
         api.get('/service-types'),
         api.get('/customers').catch(() => ({ data: [] })),
+        api.get('/discounts').catch(() => ({ data: [] })),
       ])
       setProducts(unwrapList(productResponse))
       setCategories(unwrapList(categoryResponse))
       setServices(unwrapList(serviceResponse).filter((service) => service.is_active))
       setCustomers(unwrapList(customerResponse))
+      setDiscounts(unwrapList(discountResponse))
     } catch (err) {
       setError(err.message || 'Katalog tidak dapat dimuat.')
     } finally {
@@ -246,13 +259,60 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
     return !term || [service.name, service.description].join(' ').toLowerCase().includes(term)
   }), [services, search])
 
+  const today = todayInput()
+
+  // Hanya tampilkan diskon yang aktif dan masuk periode hari ini
+  const activeDiscounts = useMemo(() => {
+    // Gunakan patokan hari ini pada tengah malam agar perbandingan aman
+    const now = new Date()
+    now.setHours(0, 0, 0, 0)
+    const timeToday = now.getTime()
+
+    return discounts.filter((discount) => {
+      // Pastikan konversi is_active dari string '1'/'0', number 1/0, atau true/false
+      const isActive = discount.is_active === true || discount.is_active === 1 || discount.is_active === '1'
+      if (!isActive) return false
+
+      // Parse tanggal mulai dan akhir
+      const start = new Date(discount.start_date)
+      start.setHours(0, 0, 0, 0)
+
+      const end = new Date(discount.end_date)
+      // Set jam ke 23:59:59 agar promo berlaku hingga penghujung hari tersebut
+      end.setHours(23, 59, 59, 999)
+
+      // Cek validitas date (kalau null dari DB, isNaN akan true)
+      if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+        return false
+      }
+
+      return timeToday >= start.getTime() && timeToday <= end.getTime()
+    })
+  }, [discounts])
+
   const selectedCustomer = useMemo(
     () => customers.find((customer) => String(customer.id) === String(selectedCustomerId)) || null,
     [customers, selectedCustomerId]
   )
 
-  const total = cart.reduce((sum, item) => sum + Number(item.sell_price || 0) * item.quantity, 0)
+  const selectedDiscount = useMemo(
+    () => activeDiscounts.find((discount) => String(discount.id) === String(selectedDiscountId)) || null,
+    [activeDiscounts, selectedDiscountId]
+  )
+
+  const subtotal = cart.reduce((sum, item) => sum + Number(item.sell_price || 0) * item.quantity, 0)
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0)
+
+  const discountAmount = useMemo(() => {
+    if (!selectedDiscount || subtotal <= 0) return 0
+    if (selectedDiscount.type === 'percentage') {
+      const percent = Math.min(100, Math.max(0, Number(selectedDiscount.value || 0)))
+      return Math.round(subtotal * (percent / 100))
+    }
+    return Math.min(subtotal, Math.max(0, Number(selectedDiscount.value || 0)))
+  }, [selectedDiscount, subtotal])
+
+  const total = Math.max(0, subtotal - discountAmount)
 
   const numericPayAmount =
     paymentMethod === 'qris_gopay'
@@ -272,7 +332,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
       : paymentMethod === 'qris_gopay'
       ? qrisConfirmed
       : paymentMethod === 'debt'
-      ? Boolean(selectedCustomerId) && numericPayAmount >= 0 && numericPayAmount < total
+      ? Boolean(selectedCustomerId) && total > 0 && numericPayAmount >= 0 && numericPayAmount < total
       : false)
 
   const checkout = async () => {
@@ -288,6 +348,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
         items: cart.map((item) => ({ product_id: item.id, quantity: item.quantity })),
       }
       if (selectedCustomerId) payload.customer_id = Number(selectedCustomerId)
+      if (selectedDiscount) payload.discount_id = Number(selectedDiscount.id)
       if (paymentMethod === 'qris_gopay') {
         payload.manual_verification_confirmed = true
         payload.payment_reference = paymentReference.trim() || null
@@ -297,6 +358,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
       checkoutKeyRef.current = null
       setCart([])
       setSelectedCustomerId('')
+      setSelectedDiscountId('')
       setPayAmount('')
       setPaymentReference('')
       setQrisConfirmed(false)
@@ -346,7 +408,7 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
           <div className="catalog-count">Menampilkan {tab === 'services' ? filteredServices.length : tab === 'products' ? filteredProducts.length : filteredProducts.length + filteredServices.length} {tab === 'services' ? 'layanan' : tab === 'products' ? 'barang' : 'barang dan layanan'}</div>
           <div className="transaction-guide">
             <strong><Icon name="info" size={16} /> Alur transaksi</strong>
-            <ol><li>Pilih barang dari katalog dan tambahkan ke keranjang.</li><li>Atur jumlah barang sesuai kebutuhan pelanggan.</li><li>Pilih metode pembayaran, lalu proses transaksi.</li></ol>
+            <ol><li>Pilih barang dari katalog dan tambahkan ke keranjang.</li><li>Atur jumlah barang dan pilih promo diskon jika berlaku.</li><li>Pilih metode pembayaran, lalu proses transaksi.</li></ol>
           </div>
         </section>
 
@@ -363,8 +425,15 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
               )) : <div className="cart-empty"><div className="cart-empty-icon"><Icon name="receipt" size={24} /></div><strong>Keranjang masih kosong</strong><span>Pilih barang dari katalog untuk memulai transaksi.</span></div>}
             </div>
             <div className="cart-totals">
-              <div><span>Subtotal</span><strong>{formatCurrency(total)}</strong></div>
-              <div><span>Diskon</span><strong>{formatCurrency(0)}</strong></div>
+              <div><span>Subtotal</span><strong>{formatCurrency(subtotal)}</strong></div>
+              <div>
+                <span>
+                  Diskon {selectedDiscount ? `(${selectedDiscount.name})` : ''}
+                </span>
+                <strong>
+                  {discountAmount > 0 ? `-${formatCurrency(discountAmount)}` : formatCurrency(0)}
+                </strong>
+              </div>
               <div className="cart-grand-total"><span>Total pembayaran</span><strong>{formatCurrency(total)}</strong></div>
             </div>
           </section>
@@ -391,6 +460,28 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
                     {customer.name}
                     {customer.phone ? ` · ${customer.phone}` : ''}
                     {Number(customer.total_debt || 0) > 0 ? ` (Piutang: ${formatCurrency(customer.total_debt)})` : ''}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="customer-select">
+              <span>Promo / Diskon</span>
+              <select
+                value={selectedDiscountId}
+                onChange={(event) => {
+                  checkoutKeyRef.current = null
+                  setSelectedDiscountId(event.target.value)
+                }}
+              >
+                <option value="">Tanpa promo / diskon</option>
+                {activeDiscounts.map((discount) => (
+                  <option key={discount.id} value={discount.id}>
+                    {discount.name} (
+                    {discount.type === 'percentage'
+                      ? `${Number(discount.value)}%`
+                      : `Potongan ${formatCurrency(discount.value)}`}
+                    )
                   </option>
                 ))}
               </select>
