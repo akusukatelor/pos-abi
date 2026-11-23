@@ -81,7 +81,7 @@ export default function PublicHelpPage() {
             <img src="/logo_abicell.png" alt="Logo LARIS - ABICELL" />
             <span><strong>LARIS - ABICELL</strong><small>Bantuan pelanggan</small></span>
           </a>
-          <a className="public-help-staff-link" href="/">Masuk sebagai petugas <span aria-hidden="true">↗</span></a>
+          <a className="public-help-staff-link" href="/?halaman=toko">Lihat Toko Online <span aria-hidden="true">↗</span></a>
         </div>
       </header>
 
@@ -97,7 +97,7 @@ export default function PublicHelpPage() {
           </div>
           <div className="public-help-scope-note">
             <strong>Informasi penting</strong>
-            <p>Halaman ini bukan toko online. Pembelian dan pembayaran dilakukan di toko; tidak ada checkout melalui chatbot.</p>
+            <p>Halaman ini khusus FAQ. Pesanan online tersedia melalui halaman toko, dengan pembayaran tunai saat pengambilan. Chatbot tidak memproses pesanan atau pembayaran.</p>
           </div>
         </section>
 

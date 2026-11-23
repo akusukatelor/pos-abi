@@ -86,7 +86,7 @@ export default function DiscountPage({ search = '' }) {
   }, [])
 
   useEffect(() => {
-    void loadDiscounts()
+    void Promise.resolve().then(loadDiscounts)
   }, [loadDiscounts])
 
   const totalDiscounts = discounts.length

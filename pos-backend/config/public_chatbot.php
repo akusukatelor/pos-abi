@@ -30,7 +30,7 @@ return [
         'belanja' => [
             'label' => 'Cara belanja',
             'question' => 'Bagaimana cara belanja di toko?',
-            'answer' => 'Saat ini pembelian dilakukan langsung di toko. Website ini hanya menyediakan informasi dan bantuan; pemesanan serta checkout online belum tersedia.',
+            'answer' => 'Pelanggan dapat membuat pesanan melalui halaman toko online setelah mendaftar atau login. Pembayaran dilakukan secara tunai ketika mengambil barang di toko. Halaman chatbot hanya untuk bantuan FAQ, bukan untuk memproses pesanan.',
             'patterns' => [
                 '/\b(?:cara belanja|cara membeli|cara beli|belanja online|pesan online|checkout online|pemesanan online|bisa pesan|bisa beli online)\b/u',
             ],

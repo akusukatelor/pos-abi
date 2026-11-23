@@ -7,6 +7,7 @@ import DashboardPage from './pages/DashboardPage.jsx'
 import PosPage from './pages/PosPage.jsx'
 import InventoryPage from './pages/InventoryPage.jsx'
 import CustomerPage from './pages/CustomerPage.jsx'
+import OnlineOrdersPage from './pages/OnlineOrdersPage.jsx'
 import DiscountPage from './pages/DiscountPage.jsx'
 import SuppliersPage from './pages/SuppliersPage.jsx'
 import DigitalServicesPage from './pages/DigitalServicesPage.jsx'
@@ -93,7 +94,7 @@ export default function App() {
       return
     }
     if (
-      ['reports', 'management', 'settings', 'customers', 'discounts'].includes(nextPage) &&
+      ['reports', 'management', 'settings', 'customers', 'discounts', 'online-orders'].includes(nextPage) &&
       user?.role !== 'admin'
     ) return
     setGlobalSearch('')
@@ -135,6 +136,10 @@ export default function App() {
 
     case 'customers':
       content = <CustomerPage search={globalSearch} />
+      break
+
+    case 'online-orders':
+      content = <OnlineOrdersPage />
       break
 
     case 'discounts':

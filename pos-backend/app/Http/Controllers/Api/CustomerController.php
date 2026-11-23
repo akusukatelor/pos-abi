@@ -56,10 +56,15 @@ class CustomerController extends Controller
             ], 404);
         }
 
-        return response()->json([
-            'status' => 'success',
-            'data' => $this->withFinancialHistory($customer),
-        ]);
+        $account = $customer->account;
+        $result = $this->withFinancialHistory($customer);
+        $result['online_account'] = $account ? [
+            'email' => $account->email,
+            'points_balance' => (int) $account->loyaltyEntries()->sum('points_delta'),
+            'loyalty_enabled' => false,
+        ] : null;
+
+        return response()->json(['status' => 'success', 'data' => $result]);
     }
 
     public function update(Request $request, $id)
@@ -104,6 +109,13 @@ class CustomerController extends Controller
                 'status' => 'error',
                 'message' => 'Pelanggan masih memiliki piutang yang belum lunas.',
             ], 422);
+        }
+
+        if ($customer->account()->exists()) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Pelanggan memiliki akun online. Nonaktifkan akun, bukan menghapus data pelanggan.',
+            ], 409);
         }
 
         if ($customer->transactions()->exists() || $customer->debtPayments()->exists()) {

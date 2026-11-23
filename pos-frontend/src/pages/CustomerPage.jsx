@@ -92,7 +92,7 @@ export default function CustomerPage({ search = '' }) {
   }, [])
 
   useEffect(() => {
-    void loadCustomers()
+    void Promise.resolve().then(loadCustomers)
   }, [loadCustomers])
 
   // =========================================
@@ -854,6 +854,16 @@ export default function CustomerPage({ search = '' }) {
                       <strong className="customer-debt-total">
                         {formatCurrency(selectedCustomer.total_debt)}
                       </strong>
+                    </div>
+
+                    <div>
+                      <span>Akun Online</span>
+                      <strong>{selectedCustomer.online_account?.email || 'Belum punya akun online'}</strong>
+                    </div>
+
+                    <div>
+                      <span>Loyalty Points</span>
+                      <strong>{selectedCustomer.online_account ? `${selectedCustomer.online_account.points_balance} poin (program belum aktif)` : '—'}</strong>
                     </div>
 
                     <div>

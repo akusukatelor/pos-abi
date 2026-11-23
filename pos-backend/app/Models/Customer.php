@@ -16,6 +16,11 @@ class Customer extends Model
         return ['total_debt' => 'decimal:2'];
     }
 
+    public function account()
+    {
+        return $this->hasOne(CustomerAccount::class);
+    }
+
     public function debtPayments()
     {
         return $this->hasMany(CustomerDebtPayment::class);

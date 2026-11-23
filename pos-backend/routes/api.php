@@ -3,6 +3,10 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\CustomerController;
+use App\Http\Controllers\Api\CustomerWebAuthController;
+use App\Http\Controllers\Api\OnlineStoreController;
+use App\Http\Controllers\Api\OnlineOrderManagementController;
+use App\Http\Middleware\EnsureCustomerAccount;
 use App\Http\Controllers\Api\DiscountController;
 use App\Http\Controllers\Api\ExpenseController;
 use App\Http\Controllers\Api\OwnerDashboardController;
@@ -34,12 +38,27 @@ Route::post('login', [AuthController::class, 'login'])->middleware('throttle:5,1
 Route::get('public/faq', [PublicChatController::class, 'faq'])->middleware('throttle:60,1');
 Route::post('public/chat', [PublicChatController::class, 'chat'])->middleware('throttle:12,1');
 
+// P4: e-commerce sederhana. Katalog anonim; registrasi/login dan transaksi dipisah dari staf.
+Route::get('store/catalog', [OnlineStoreController::class, 'catalog'])->middleware('throttle:60,1');
+Route::post('customer/register', [CustomerWebAuthController::class, 'register'])->middleware('throttle:5,1');
+Route::post('customer/login', [CustomerWebAuthController::class, 'login'])->middleware('throttle:5,1');
+Route::middleware(['auth:sanctum', EnsureCustomerAccount::class])->group(function (): void {
+    Route::get('customer/me', [CustomerWebAuthController::class, 'me']);
+    Route::post('customer/logout', [CustomerWebAuthController::class, 'logout']);
+    Route::get('customer/orders', [OnlineStoreController::class, 'myOrders']);
+    Route::post('customer/orders', [OnlineStoreController::class, 'placeOrder'])->middleware('throttle:12,1');
+    Route::get('customer/orders/{id}', [OnlineStoreController::class, 'showMyOrder'])->whereNumber('id');
+    Route::get('customer/loyalty', [OnlineStoreController::class, 'loyalty']);
+});
+
+
 /*
 |--------------------------------------------------------------------------
 | Authenticated routes
 |--------------------------------------------------------------------------
 */
-Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
+// Tambahan role di level terluar: token CustomerAccount tidak boleh memakai API staf.
+Route::middleware(['auth:sanctum', 'active', 'role:admin,kasir'])->group(function (): void {
     Route::get('me', [AuthController::class, 'me']);
     Route::post('logout', [AuthController::class, 'logout']);
 
@@ -55,7 +74,7 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
     Route::get('products/{id}', [ProductController::class, 'show']);
     Route::post('assistant/chat', [ProductController::class, 'chat']);
     Route::get('discounts', [DiscountController::class, 'index']);
-    Route::get('discounts/{id}', [DiscountController::class, 'show']);
+    Route::get('discounts/{id}', [DiscountController::class, 'show']);  
 
     // Owner dan Kasir dapat melihat daftar pelanggan (untuk pilihan Kasbon di POS).
     Route::get('customers', [CustomerController::class, 'index']);
@@ -111,6 +130,11 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
         Route::get('reports/services', [ReportController::class, 'services']);
 
         Route::get('dashboard/owner', [OwnerDashboardController::class, 'show']);
+
+        // P4: Owner mengelola pesanan online dan menerima pembayaran tunai saat ambil.
+        Route::get('admin/online-orders', [OnlineOrderManagementController::class, 'index']);
+        Route::post('admin/online-orders/{id}/complete', [OnlineOrderManagementController::class, 'complete'])->whereNumber('id');
+        Route::post('admin/online-orders/{id}/cancel', [OnlineOrderManagementController::class, 'cancel'])->whereNumber('id');
         Route::get('restock-settings', [RestockSettingController::class, 'index']);
         Route::put('restock-settings/{productId}', [RestockSettingController::class, 'update'])->whereNumber('productId');
         Route::get('restock-recommendations', [RestockRecommendationController::class, 'index']);
@@ -146,6 +170,8 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
         Route::apiResource('customers', CustomerController::class)->except(['index', 'show']);
         Route::apiResource('expenses', ExpenseController::class);
         Route::apiResource('shifts', ShiftController::class);
+        
+        // HAPUS BARIS INI: Route::apiResource('discounts', DiscountController::class);
 
         Route::post('stock-movements', [StockMovementController::class, 'store']);
 

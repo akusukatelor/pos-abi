@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, makeIdempotencyKey, unwrapList } from '../api/client.js'
 import Icon from '../components/Icon.jsx'
 import Modal from '../components/Modal.jsx'
-import { formatCurrency, formatDate, formatNumber, paymentLabel, todayInput } from '../utils/format.js'
+import { formatCurrency, formatDate, formatNumber, paymentLabel } from '../utils/format.js'
 
 const colorSet = ['tile-sand', 'tile-peach', 'tile-blue', 'tile-green', 'tile-lilac', 'tile-yellow']
 
@@ -154,7 +154,7 @@ function ReceiptModal({ transaction, onClose }) {
   )
 }
 
-export default function PosPage({ user, globalSearch = '', onToast }) {
+export default function PosPage({ globalSearch = '', onToast }) {
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [customers, setCustomers] = useState([])
@@ -259,7 +259,6 @@ export default function PosPage({ user, globalSearch = '', onToast }) {
     return !term || [service.name, service.description].join(' ').toLowerCase().includes(term)
   }), [services, search])
 
-  const today = todayInput()
 
   // Hanya tampilkan diskon yang aktif dan masuk periode hari ini
   const activeDiscounts = useMemo(() => {
