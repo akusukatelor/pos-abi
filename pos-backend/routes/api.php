@@ -50,12 +50,10 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
     Route::get('products/{id}', [ProductController::class, 'show']);
     Route::post('assistant/chat', [ProductController::class, 'chat']);
     Route::get('discounts', [DiscountController::class, 'index']);
-    Route::get('discounts/{id}', [DiscountController::class, 'show']);  
+    Route::get('discounts/{id}', [DiscountController::class, 'show']);
 
     // Owner dan Kasir dapat melihat daftar pelanggan (untuk pilihan Kasbon di POS).
     Route::get('customers', [CustomerController::class, 'index']);
-    Route::get('customers/{customer}', [CustomerController::class, 'show']);
-    Route::post('customers/{id}/pay-debt', [CustomerController::class, 'payDebt'])->whereNumber('id');
 
     // Cashier and Owner may process sales. The controller scopes Cashier history to their own sales.
     Route::get('transactions', [TransactionController::class, 'index']);
@@ -134,12 +132,15 @@ Route::middleware(['auth:sanctum', 'active'])->group(function (): void {
         Route::patch('discounts/{id}', [DiscountController::class, 'update']);
         Route::delete('discounts/{id}', [DiscountController::class, 'destroy']);
 
-        // Tambah, edit, dan hapus pelanggan khusus Owner
+        // Detail dan pelunasan piutang pelanggan bersifat finansial: hanya Owner.
+        Route::get('customers/{customer}', [CustomerController::class, 'show'])->whereNumber('customer');
+        Route::post('customers/{id}/pay-debt', [CustomerController::class, 'payDebt'])
+            ->whereNumber('id');
+
+        // Master data pelanggan hanya boleh diubah Owner.
         Route::apiResource('customers', CustomerController::class)->except(['index', 'show']);
         Route::apiResource('expenses', ExpenseController::class);
         Route::apiResource('shifts', ShiftController::class);
-        
-        // HAPUS BARIS INI: Route::apiResource('discounts', DiscountController::class);
 
         Route::post('stock-movements', [StockMovementController::class, 'store']);
 

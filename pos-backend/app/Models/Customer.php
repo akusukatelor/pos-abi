@@ -11,6 +11,16 @@ class Customer extends Model
 
     protected $fillable = ['name', 'phone', 'address', 'total_debt'];
 
+    protected function casts(): array
+    {
+        return ['total_debt' => 'decimal:2'];
+    }
+
+    public function debtPayments()
+    {
+        return $this->hasMany(CustomerDebtPayment::class);
+    }
+
     public function transactions()
     {
         // Satu pelanggan bisa memiliki banyak transaksi

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
-import { api } from '../api/client.js'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { api, makeIdempotencyKey } from '../api/client.js'
 import Icon from '../components/Icon.jsx'
 import {
   formatCurrency,
@@ -63,6 +63,8 @@ export default function CustomerPage({ search = '' }) {
   const [payDebtAmount, setPayDebtAmount] = useState('')
   const [payDebtSaving, setPayDebtSaving] = useState(false)
   const [payDebtError, setPayDebtError] = useState('')
+  // Pertahankan UUID saat retry; buat baru bila instruksi pembayaran berubah.
+  const payDebtKeyRef = useRef(null)
 
   // =========================================
   // LOAD DATA CUSTOMER
@@ -276,6 +278,7 @@ export default function CustomerPage({ search = '' }) {
   // =========================================
 
   const openPayDebtModal = (customer, transaction = null) => {
+    payDebtKeyRef.current = null
     setPayingCustomer(customer)
     setPayingTransaction(transaction)
     setPayDebtError('')
@@ -324,8 +327,11 @@ export default function CustomerPage({ search = '' }) {
     setPayDebtError('')
 
     try {
+      if (!payDebtKeyRef.current) payDebtKeyRef.current = makeIdempotencyKey()
       const payload = {
+        idempotency_key: payDebtKeyRef.current,
         amount: numericAmount,
+        payment_method: 'cash',
       }
 
       if (payingTransaction) {
@@ -340,8 +346,11 @@ export default function CustomerPage({ search = '' }) {
       const updatedCustomer = getPayload(response)
 
       setNotice(
-        `Pembayaran piutang sebesar ${formatCurrency(numericAmount)} untuk ${payingCustomer.name} berhasil dicatat.`
+        response.meta?.idempotent_replay
+          ? 'Pembayaran sebelumnya sudah berhasil dicatat; tidak diproses ulang.'
+          : `Pembayaran tunai ${formatCurrency(numericAmount)} untuk ${payingCustomer.name} berhasil dicatat.`
       )
+      payDebtKeyRef.current = null
 
       setPayDebtOpen(false)
       setPayingCustomer(null)
@@ -987,6 +996,46 @@ export default function CustomerPage({ search = '' }) {
 
                   </div>
 
+                  <div className="customer-history-heading">
+                    <div>
+                      <h3>Riwayat Pembayaran Piutang</h3>
+                      <p>Catatan pembayaran tunai yang dibuat setelah modul audit diterapkan.</p>
+                    </div>
+                    <span className="count-pill">{selectedCustomer.debt_payments?.length || 0} pembayaran</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="data-table customer-history-table">
+                      <thead>
+                        <tr>
+                          <th>Tanggal</th><th>Nominal</th><th>Metode</th>
+                          <th>Diterima oleh</th><th>Alokasi Invoice</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedCustomer.debt_payments?.length ? (
+                          selectedCustomer.debt_payments.map((payment) => (
+                            <tr key={payment.id}>
+                              <td>{formatDate(payment.created_at, true)}</td>
+                              <td className="money-cell">{formatCurrency(payment.amount)}</td>
+                              <td>Tunai</td>
+                              <td>{payment.user?.name || '—'}</td>
+                              <td>
+                                {(payment.allocations || []).map((allocation) => (
+                                  <div key={allocation.id}>
+                                    {allocation.transaction?.invoice_number || `TRX-${allocation.transaction_id}`}
+                                    {' · '}{formatCurrency(allocation.amount)}
+                                  </div>
+                                ))}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr><td colSpan="5" className="table-message">Belum ada pembayaran pada audit trail baru.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
                 </>
 
               ) : null}
@@ -1069,6 +1118,11 @@ export default function CustomerPage({ search = '' }) {
                 </div>
               </div>
 
+              <p className="payment-hint">
+                Metode penerimaan: <strong>Tunai</strong>. Setiap pembayaran dicatat
+                ke riwayat audit dengan nama Owner dan waktu transaksi.
+              </p>
+
               <label>
                 Nominal Pembayaran (Rp)
 
@@ -1079,7 +1133,8 @@ export default function CustomerPage({ search = '' }) {
                   step="1"
                   placeholder="Masukkan nominal yang dibayarkan"
                   value={payDebtAmount}
-                  onChange={(event) => setPayDebtAmount(event.target.value)}
+                  onChange={(event) => { payDebtKeyRef.current = null; setPayDebtAmount(event.target.value) }}
+                  disabled={payDebtSaving}
                   required
                   autoFocus
                 />
@@ -1096,7 +1151,8 @@ export default function CustomerPage({ search = '' }) {
                 <button
                   type="button"
                   className="small-action"
-                  onClick={() => setPayDebtAmount(String(maxPayableDebt))}
+                  onClick={() => { payDebtKeyRef.current = null; setPayDebtAmount(String(maxPayableDebt)) }}
+                  disabled={payDebtSaving}
                 >
                   Bayar Lunas Penuh
                 </button>
@@ -1107,7 +1163,7 @@ export default function CustomerPage({ search = '' }) {
                 <button
                   type="button"
                   className="outline-button"
-                  onClick={() => setPayDebtOpen(false)}
+                  onClick={() => { if (!payDebtSaving) { setPayDebtOpen(false); payDebtKeyRef.current = null } }}
                   disabled={payDebtSaving}
                 >
                   Batal
