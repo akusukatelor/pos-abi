@@ -54,6 +54,7 @@ export default function LoginPage({ onLogin }) {
           </button>
         </form>
         <div className="login-footnote"><Icon name="info" size={14} /> Gunakan akun Owner atau Kasir yang telah terdaftar.</div>
+        <p style={{ marginTop: 14, textAlign: 'center', fontSize: 12 }}><a href="/?halaman=bantuan" style={{ color: '#315f9c', fontWeight: 700 }}>Bantuan pelanggan (tanpa login)</a></p>
       </section>
       <div className="login-footer">© {new Date().getFullYear()} LARIS - ABICELL · Sistem POS &amp; Inventory</div>
     </div>

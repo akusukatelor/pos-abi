@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\DiscountController;
 use App\Http\Controllers\Api\ExpenseController;
 use App\Http\Controllers\Api\OwnerDashboardController;
 use App\Http\Controllers\Api\ProductController;
+use App\Http\Controllers\Api\PublicChatController;
 use App\Http\Controllers\Api\PurchaseReceiptController;
 use App\Http\Controllers\Api\ReportController;
 use App\Http\Controllers\Api\RestockRecommendationController;
@@ -28,6 +29,10 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 Route::post('login', [AuthController::class, 'login'])->middleware('throttle:5,1');
+
+// FAQ publik: sengaja di luar auth:sanctum. Jangan expose assistant/chat internal.
+Route::get('public/faq', [PublicChatController::class, 'faq'])->middleware('throttle:60,1');
+Route::post('public/chat', [PublicChatController::class, 'chat'])->middleware('throttle:12,1');
 
 /*
 |--------------------------------------------------------------------------
