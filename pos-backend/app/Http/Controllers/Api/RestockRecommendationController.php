@@ -48,7 +48,7 @@ class RestockRecommendationController extends Controller
                     'target_stock' => '(average_daily_sales * (lead_time_days + review_interval_days)) + safety_stock',
                     'suggested_order_quantity' => 'max(0, ceil(target_stock - current_stock)) when current_stock <= reorder_point',
                 ],
-                'sales_basis' => 'Only transactions with payment_status=paid are included.',
+                'sales_basis' => 'Completed sales (cash/QRIS paid and debt regardless of settlement status) are included; pending online orders are excluded.',
                 'unit_basis' => 'The current product unit is used for both stock and sold quantity; unit conversion is not yet implemented.',
                 'decision_support_only' => true,
             ],

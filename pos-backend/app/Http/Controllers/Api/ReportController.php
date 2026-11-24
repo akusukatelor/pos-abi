@@ -8,6 +8,7 @@ use App\Models\PurchaseReceipt;
 use App\Models\ServiceTransaction;
 use App\Models\StockMovement;
 use App\Models\Transaction;
+use App\Services\SalesFinanceService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -16,13 +17,11 @@ use Illuminate\Validation\ValidationException;
 
 class ReportController extends Controller
 {
-    public function summary(Request $request): JsonResponse
+    public function summary(Request $request, SalesFinanceService $finance): JsonResponse
     {
         [$from, $to] = $this->period($request);
 
-        $sales = Transaction::query()
-            ->where('payment_status', 'paid')
-            ->whereBetween('created_at', [$from, $to]);
+        $financial = $finance->period($from->toDateTimeString(), $to->startOfDay()->addDay()->toDateTimeString());
 
         $purchases = $this->applyDateRange(
             PurchaseReceipt::query()->where('status', 'confirmed'),
@@ -43,8 +42,7 @@ class ReportController extends Controller
             'period' => $this->periodPayload($from, $to),
             'data' => [
                 'sales' => [
-                    'transaction_count' => (clone $sales)->count(),
-                    'omzet_barang' => number_format((float) (clone $sales)->sum('total_price'), 2, '.', ''),
+                    ...$financial,
                     'gross_profit' => null,
                     'gross_profit_status' => 'not_calculated',
                     'gross_profit_note' => 'Metode HPP dan snapshot harga pokok pada waktu penjualan belum ditetapkan.',
@@ -69,18 +67,21 @@ class ReportController extends Controller
         ]);
     }
 
-    public function sales(Request $request): JsonResponse
+    public function sales(Request $request, SalesFinanceService $finance): JsonResponse
     {
         [$from, $to] = $this->period($request);
 
         $query = Transaction::query()
             ->with(['user:id,name', 'customer:id,name'])
-            ->where('payment_status', 'paid')
             ->whereBetween('created_at', [$from, $to]);
+        SalesFinanceService::scopeSales($query);
+        $financial = $finance->period($from->toDateTimeString(), $to->startOfDay()->addDay()->toDateTimeString());
 
         $paymentBreakdown = DB::table('transactions')
-            ->where('payment_status', 'paid')
             ->whereBetween('created_at', [$from, $to])
+            ->where(function ($builder): void {
+                $builder->where('payment_method', 'debt')->orWhere('payment_status', 'paid');
+            })
             ->select('payment_method')
             ->selectRaw('COUNT(*) as transaction_count')
             ->selectRaw('SUM(total_price) as omzet')
@@ -97,8 +98,7 @@ class ReportController extends Controller
             'status' => 'success',
             'period' => $this->periodPayload($from, $to),
             'summary' => [
-                'transaction_count' => (clone $query)->count(),
-                'omzet_barang' => number_format((float) (clone $query)->sum('total_price'), 2, '.', ''),
+                ...$financial,
                 'gross_profit' => null,
                 'gross_profit_status' => 'not_calculated',
                 'gross_profit_note' => 'Metode HPP dan snapshot harga pokok pada waktu penjualan belum ditetapkan.',

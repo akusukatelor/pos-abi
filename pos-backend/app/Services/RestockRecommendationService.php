@@ -27,7 +27,7 @@ class RestockRecommendationService
             ->orderBy('id')
             ->get();
 
-        $salesByProduct = $this->aggregatePaidSales($products);
+        $salesByProduct = $this->aggregateCompletedSales($products);
 
         $recommendations = $products
             ->map(fn (Product $product): array => $this->buildRecommendation(
@@ -50,11 +50,11 @@ class RestockRecommendationService
     }
 
     /**
-     * Aggregate paid transaction quantities by product and configured sales window.
+     * Aggregate completed sales (including unpaid kasbon) quantities by product and configured sales window.
      *
      * @return array<int, array{units_sold: int, transaction_count: int}>
      */
-    private function aggregatePaidSales(Collection $products): array
+    private function aggregateCompletedSales(Collection $products): array
     {
         $configuredProducts = $products->filter(
             fn (Product $product): bool => $product->restockSetting !== null,
@@ -71,7 +71,10 @@ class RestockRecommendationService
 
             $rows = DB::table('transaction_details')
                 ->join('transactions', 'transactions.id', '=', 'transaction_details.transaction_id')
-                ->where('transactions.payment_status', 'paid')
+                ->where(function ($builder): void {
+                    $builder->where('transactions.payment_method', 'debt')
+                        ->orWhere('transactions.payment_status', 'paid');
+                })
                 ->where('transactions.created_at', '>=', $start->toDateTimeString())
                 ->where('transactions.created_at', '<', $endExclusive->toDateTimeString())
                 ->whereIn('transaction_details.product_id', $periodProducts->pluck('id'))
@@ -133,7 +136,7 @@ class RestockRecommendationService
                 'period_days' => $salesPeriodDays,
                 'units_sold' => $sales['units_sold'],
                 'transaction_count' => $sales['transaction_count'],
-                'included_status' => 'paid',
+                'included_status' => 'paid_or_debt',
             ],
         ];
 
@@ -199,7 +202,7 @@ class RestockRecommendationService
                     'suggested_order_quantity' => $suggestedQuantity,
                     'reason' => $sales['units_sold'] > 0
                         ? 'Rekomendasi menggunakan ambang minimum stok yang ditetapkan Owner.'
-                        : 'Belum ada penjualan berbayar dalam periode analisis; rekomendasi menggunakan ambang minimum stok yang ditetapkan Owner.',
+                        : 'Belum ada penjualan tercatat dalam periode analisis; rekomendasi menggunakan ambang minimum stok yang ditetapkan Owner.',
                 ],
             ];
         }
@@ -208,7 +211,7 @@ class RestockRecommendationService
             return $this->withInsufficientData($base, 'incomplete_restock_parameters', 'Lead time, safety stock, dan interval peninjauan belum diatur lengkap.');
         }
 
-        return $this->withInsufficientData($base, 'no_sales_history', 'Belum ada penjualan berbayar dalam periode analisis dan belum ada ambang minimum stok manual dari Owner.');
+        return $this->withInsufficientData($base, 'no_sales_history', 'Belum ada penjualan tercatat dalam periode analisis dan belum ada ambang minimum stok manual dari Owner.');
     }
 
     /**

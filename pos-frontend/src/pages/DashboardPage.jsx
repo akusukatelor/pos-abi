@@ -182,28 +182,8 @@ export default function DashboardPage({ search = '', onNavigate }) {
     [customers]
   )
 
-  // Jika backend belum mengirim breakdown 'debt', hitung fallback dari daftar transaksi periode terpilih
-  const paymentBreakdownRows = useMemo(() => {
-    const baseRows = Array.isArray(sales.payment_breakdown) ? [...sales.payment_breakdown] : []
-    const hasDebtRow = baseRows.some((row) => row.payment_method === 'debt')
-
-    if (!hasDebtRow) {
-      const fromTime = from ? new Date(`${from}T00:00:00`).getTime() : 0
-      const toTime = to ? new Date(`${to}T23:59:59`).getTime() : Number.MAX_SAFE_INTEGER
-
-      const debtTotal = transactions
-        .filter((tx) => {
-          if (tx.payment_method !== 'debt') return false
-          const txTime = new Date(tx.created_at || 0).getTime()
-          return txTime >= fromTime && txTime <= toTime
-        })
-        .reduce((sum, tx) => sum + Number(tx.total_price || 0), 0)
-
-      baseRows.push({ payment_method: 'debt', omzet: debtTotal })
-    }
-
-    return baseRows
-  }, [sales.payment_breakdown, transactions, from, to])
+  // Backend P2 menyediakan breakdown lengkap, termasuk Kasbon yang belum lunas.
+  const paymentBreakdownRows = sales.payment_breakdown || []
 
   const recent = useMemo(() => transactionRows(transactions, services).filter((row) => {
     const term = search.trim().toLowerCase()
@@ -228,7 +208,8 @@ export default function DashboardPage({ search = '', onNavigate }) {
       {error && <div className="inline-alert"><Icon name="warning" size={17} />{error}<button type="button" onClick={load}>Coba lagi</button></div>}
 
       <div className="kpi-grid">
-        <KpiCard label="Total Penjualan Barang" value={loading ? 'Memuat…' : formatCurrency(sales.omzet_barang)} note={`${sales.transaction_count || 0} transaksi berbayar`} icon="wallet" tone="green" />
+        <KpiCard label="Total Penjualan Barang" value={loading ? 'Memuat…' : formatCurrency(sales.omzet_barang)} note={`${sales.transaction_count || 0} transaksi termasuk Kasbon`} icon="wallet" tone="green" />
+        <KpiCard label="Pembayaran Diterima (Periode)" value={loading ? 'Memuat…' : formatCurrency(sales.cash_received)} note="Termasuk pembayaran kasbon pada periode ini" icon="wallet" tone="blue" />
         <KpiCard label="Total Transaksi" value={loading ? '—' : (sales.transaction_count || 0).toLocaleString('id-ID')} note={`${serviceData.completed_count || 0} transaksi layanan selesai`} icon="receipt" tone="blue" />
         <KpiCard label="Total Piutang Pelanggan" value={loading ? 'Memuat…' : formatCurrency(totalCustomerDebt)} note={`${customersWithDebtCount} pelanggan memiliki kasbon`} icon="users" tone="orange" onClick={() => onNavigate('customers')} />
         <KpiCard label="Stok Perlu Ditinjau" value={loading ? '—' : `${inventory.needs_restock_count || 0} item`} note={`${inventory.insufficient_data_count || 0} item belum cukup data`} icon="box" tone="orange" onClick={() => onNavigate('settings')} />
@@ -238,13 +219,13 @@ export default function DashboardPage({ search = '', onNavigate }) {
       <div className="dashboard-chart-grid">
         <section className="panel chart-panel">
           <div className="panel-heading">
-            <div><h2>Tren Penjualan Harian (Barang)</h2><p>Omzet transaksi berstatus lunas pada periode terpilih.</p></div>
+            <div><h2>Tren Penjualan Harian (Barang)</h2><p>Omzet berdasarkan tanggal penjualan, termasuk Kasbon belum lunas.</p></div>
           </div>
           {loading ? <div className="skeleton-chart" /> : <TrendChart rows={data.sales_trend || []} />}
         </section>
         <section className="panel chart-panel">
           <div className="panel-heading">
-            <div><h2>Metode Pembayaran</h2><p>Perbandingan transaksi Tunai, QRIS GoPay, dan Kasbon.</p></div>
+            <div><h2>Metode Pembayaran</h2><p>Nilai penjualan per metode, bukan jumlah uang yang telah diterima.</p></div>
           </div>
           {loading ? <div className="skeleton-chart" /> : <PaymentChart rows={paymentBreakdownRows} />}
         </section>

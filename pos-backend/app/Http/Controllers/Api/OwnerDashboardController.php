@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Product;
 use App\Services\RestockRecommendationService;
+use App\Services\SalesFinanceService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -13,7 +14,7 @@ use Illuminate\Validation\ValidationException;
 
 class OwnerDashboardController extends Controller
 {
-    public function show(Request $request, RestockRecommendationService $restockService): JsonResponse
+    public function show(Request $request, RestockRecommendationService $restockService, SalesFinanceService $finance): JsonResponse
     {
         $validated = $request->validate([
             'from' => ['nullable', 'date_format:Y-m-d'],
@@ -39,9 +40,11 @@ class OwnerDashboardController extends Controller
         $endDateTime = $endExclusive->toDateTimeString();
 
         $sales = DB::table('transactions')
-            ->where('payment_status', 'paid')
             ->where('created_at', '>=', $fromDateTime)
             ->where('created_at', '<', $endDateTime);
+
+        SalesFinanceService::scopeSales($sales);
+        $financial = $finance->period($fromDateTime, $endDateTime);
 
         $paymentBreakdown = (clone $sales)
             ->select('payment_method')
@@ -74,7 +77,9 @@ class OwnerDashboardController extends Controller
             ->join('transactions', 'transactions.id', '=', 'transaction_details.transaction_id')
             ->join('products', 'products.id', '=', 'transaction_details.product_id')
             ->leftJoin('units', 'units.id', '=', 'products.unit_id')
-            ->where('transactions.payment_status', 'paid')
+            ->where(function ($builder): void {
+                $builder->where('transactions.payment_method', 'debt')->orWhere('transactions.payment_status', 'paid');
+            })
             ->where('transactions.created_at', '>=', $fromDateTime)
             ->where('transactions.created_at', '<', $endDateTime)
             ->select([
@@ -109,7 +114,9 @@ class OwnerDashboardController extends Controller
             ->values();
 
         $salesTrend = DB::table('transactions')
-            ->where('payment_status', 'paid')
+            ->where(function ($builder): void {
+                $builder->where('payment_method', 'debt')->orWhere('payment_status', 'paid');
+            })
             ->where('created_at', '>=', $fromDateTime)
             ->where('created_at', '<', $endDateTime)
             ->selectRaw('DATE(created_at) as sale_date')
@@ -135,8 +142,7 @@ class OwnerDashboardController extends Controller
             ],
             'data' => [
                 'sales' => [
-                    'transaction_count' => (clone $sales)->count(),
-                    'omzet_barang' => number_format((float) (clone $sales)->sum('total_price'), 2, '.', ''),
+                    ...$financial,
                     'gross_profit' => null,
                     'gross_profit_status' => 'not_calculated',
                     'gross_profit_note' => 'Metode HPP dan snapshot harga pokok pada waktu penjualan belum ditetapkan.',
