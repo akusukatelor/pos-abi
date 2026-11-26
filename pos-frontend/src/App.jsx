@@ -94,7 +94,7 @@ export default function App() {
       return
     }
     if (
-      ['reports', 'management', 'settings', 'customers', 'discounts', 'online-orders'].includes(nextPage) &&
+      ['reports', 'management', 'settings', 'customers', 'discounts'].includes(nextPage) &&
       user?.role !== 'admin'
     ) return
     setGlobalSearch('')

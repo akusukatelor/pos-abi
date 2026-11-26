@@ -108,6 +108,11 @@ Route::middleware(['auth:sanctum', 'active', 'role:admin,kasir'])->group(functio
         Route::get('stock-opnames', [StockOpnameController::class, 'index']);
         Route::post('stock-opnames', [StockOpnameController::class, 'store']);
         Route::get('stock-opnames/{id}', [StockOpnameController::class, 'show']);
+
+         Route::get('admin/online-orders', [OnlineOrderManagementController::class, 'index']);
+        Route::post('admin/online-orders/{id}/status', [OnlineOrderManagementController::class, 'updateStatus'])->whereNumber('id');
+        Route::post('admin/online-orders/{id}/complete', [OnlineOrderManagementController::class, 'complete'])->whereNumber('id');
+        Route::post('admin/online-orders/{id}/cancel', [OnlineOrderManagementController::class, 'cancel'])->whereNumber('id');
     });
 
     // Only Owner may authorize a stock correction after physical counting.
@@ -135,10 +140,7 @@ Route::middleware(['auth:sanctum', 'active', 'role:admin,kasir'])->group(functio
         Route::get('dashboard/owner', [OwnerDashboardController::class, 'show']);
 
         // P4: Owner mengelola pesanan online dan menerima pembayaran tunai saat ambil.
-        Route::get('admin/online-orders', [OnlineOrderManagementController::class, 'index']);
-        Route::post('admin/online-orders/{id}/status', [OnlineOrderManagementController::class, 'updateStatus'])->whereNumber('id');
-        Route::post('admin/online-orders/{id}/complete', [OnlineOrderManagementController::class, 'complete'])->whereNumber('id');
-        Route::post('admin/online-orders/{id}/cancel', [OnlineOrderManagementController::class, 'cancel'])->whereNumber('id');
+       
         Route::get('restock-settings', [RestockSettingController::class, 'index']);
         Route::post('restock-settings/bulk', [RestockSettingController::class, 'bulkApply']);
         Route::match(['put', 'patch'], 'restock-settings/{productId}', [RestockSettingController::class, 'update'])

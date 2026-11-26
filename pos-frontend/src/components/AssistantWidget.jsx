@@ -88,8 +88,8 @@ export default function AssistantWidget() {
         <section className="assistant-panel" aria-label="Asisten toko" style={{ width: 370, maxWidth: 'calc(100vw - 32px)' }}>
           <div className="assistant-header">
             <div>
-              <strong>Asisten Toko</strong>
-              <span>Stok, restok & status verifikasi</span>
+              <strong>SIRA</strong>
+              <span>Smart Intellegent Retail Assistant</span>
             </div>
             <div style={{ display: 'flex', gap: 4 }}>
               <button type="button" className="icon-button" onClick={resetChat} title="Bersihkan chat" aria-label="Bersihkan chat">

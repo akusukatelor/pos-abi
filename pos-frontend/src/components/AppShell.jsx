@@ -8,7 +8,7 @@ const navigation = [
   { id: 'pos', label: 'Point of Sale (POS)', icon: 'pos' },
   { id: 'inventory', label: 'Inventory', icon: 'inventory' },
   { id: 'customers', label: 'Customer', icon: 'wallet', ownerOnly: true },
-  { id: 'online-orders', label: 'Pesanan Online', icon: 'pos', ownerOnly: true },
+  { id: 'online-orders', label: 'Pesanan Online', icon: 'pos' },
   { id: 'discounts', label: 'Promo & Diskon', icon: 'discount', ownerOnly: true },
   { id: 'suppliers', label: 'Supplier', icon: 'supplier' },
   { id: 'services', label: 'Digital Services', icon: 'services' },

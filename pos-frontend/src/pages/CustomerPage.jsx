@@ -256,9 +256,19 @@ export default function CustomerPage({ search = '' }) {
     }
   }
 
+  const availablePoints = Number(
+    selectedCustomer?.points_balance ?? selectedCustomer?.online_account?.points_balance ?? 0
+  )
+  const valuePerPoint = Number(
+    selectedCustomer?.redeem_value_per_point ?? selectedCustomer?.online_account?.redeem_value_per_point ?? 1000
+  )
+
   const openRedeemModal = () => {
-    const balance = Number(selectedCustomer?.online_account?.points_balance || 0)
-    const defaultPreset = REWARD_PRESETS.find((p) => p.points <= balance) || { points: Math.min(5, balance), label: 'Voucher Belanja Toko' }
+    const defaultPreset =
+      REWARD_PRESETS.find((p) => p.points <= availablePoints) || {
+        points: Math.min(5, availablePoints),
+        label: 'Voucher Belanja Toko',
+      }
     redeemKeyRef.current = null
     setRedeemPoints(String(Math.max(1, defaultPreset.points)))
     setRedeemDescription(defaultPreset.label)
@@ -269,15 +279,14 @@ export default function CustomerPage({ search = '' }) {
   const handleRedeemSubmit = async (event) => {
     event.preventDefault()
     if (!selectedCustomer) return
-    const balance = Number(selectedCustomer.online_account?.points_balance || 0)
     const pts = Number(redeemPoints || 0)
 
     if (!Number.isInteger(pts) || pts <= 0) {
       setRedeemError('Jumlah poin harus bilangan bulat minimal 1.')
       return
     }
-    if (pts > balance) {
-      setRedeemError(`Saldo poin tidak mencukupi (maksimal ${balance} poin).`)
+    if (pts > availablePoints) {
+      setRedeemError(`Saldo poin tidak mencukupi (maksimal ${availablePoints} poin).`)
       return
     }
     if (redeemDescription.trim().length < 3) {
@@ -306,9 +315,6 @@ export default function CustomerPage({ search = '' }) {
       setRedeemSaving(false)
     }
   }
-
-  const availablePoints = Number(selectedCustomer?.online_account?.points_balance || 0)
-  const valuePerPoint = Number(selectedCustomer?.online_account?.redeem_value_per_point || 1000)
 
   return (
     <div className="customer-page">
@@ -391,7 +397,7 @@ export default function CustomerPage({ search = '' }) {
               ) : filteredCustomers.length > 0 ? (
                 filteredCustomers.map((customer, index) => {
                   const debt = Number(customer.total_debt || 0)
-                  const pts = customer.account ? Number(customer.account.points_balance || 0) : null
+                  const pts = Number(customer.points_balance ?? customer.account?.points_balance ?? 0)
                   return (
                     <tr key={customer.id}>
                       <td>{index + 1}</td>
@@ -401,11 +407,9 @@ export default function CustomerPage({ search = '' }) {
                       </td>
                       <td>{customer.phone || '—'}</td>
                       <td>
-                        {pts !== null ? (
-                          <span className="status-pill status-success">{pts.toLocaleString('id-ID')} poin</span>
-                        ) : (
-                          <span style={{ color: '#94a3b8', fontSize: 13 }}>Belum aktivasi</span>
-                        )}
+                        <span className={`status-pill ${pts > 0 ? 'status-success' : 'status-neutral'}`}>
+                          {pts.toLocaleString('id-ID')} poin
+                        </span>
                       </td>
                       <td className="money-cell">{formatCurrency(debt)}</td>
                       <td>
@@ -454,7 +458,7 @@ export default function CustomerPage({ search = '' }) {
 
         <div className="table-footnote">
           <Icon name="info" size={13} />
-          Setiap belanja lunas kelipatan Rp 10.000 otomatis menambah 1 poin loyalty bagi pelanggan yang terhubung dengan akun online.
+          Setiap belanja lunas kelipatan Rp 10.000 otomatis menambah 1 poin loyalty bagi seluruh pelanggan terdaftar.
         </div>
       </section>
 
@@ -551,24 +555,20 @@ export default function CustomerPage({ search = '' }) {
                     </div>
                     <div>
                       <span>Akun Online</span>
-                      <strong>{selectedCustomer.online_account?.email || 'Belum punya akun online'}</strong>
+                      <strong>{selectedCustomer.online_account?.email || 'Pelanggan Toko (Offline)'}</strong>
                     </div>
                     <div>
                       <span>Loyalty Points</span>
-                      {selectedCustomer.online_account ? (
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
-                          <strong style={{ color: '#15803d' }}>
-                            {availablePoints.toLocaleString('id-ID')} poin ({formatCurrency(availablePoints * valuePerPoint)})
-                          </strong>
-                          {availablePoints > 0 && (
-                            <button type="button" className="small-action primary-button" onClick={openRedeemModal}>
-                              Tukar Poin
-                            </button>
-                          )}
-                        </div>
-                      ) : (
-                        <strong>— (Daftar akun online untuk aktifkan)</strong>
-                      )}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginTop: 2 }}>
+                        <strong style={{ color: availablePoints > 0 ? '#15803d' : '#475569' }}>
+                          {availablePoints.toLocaleString('id-ID')} poin ({formatCurrency(availablePoints * valuePerPoint)})
+                        </strong>
+                        {availablePoints > 0 && (
+                          <button type="button" className="small-action primary-button" onClick={openRedeemModal}>
+                            Tukar Poin
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <span>Tanggal Terdaftar</span>
@@ -577,45 +577,41 @@ export default function CustomerPage({ search = '' }) {
                   </div>
 
                   {/* RIWAYAT LOYALTY POINTS */}
-                  {selectedCustomer.online_account && (
-                    <>
-                      <div className="customer-history-heading">
-                        <div>
-                          <h3>Riwayat Mutasi Poin Loyalty</h3>
-                          <p>Perolehan otomatis dari transaksi lunas dan catatan penukaran poin di toko.</p>
-                        </div>
-                        <span className="count-pill">{selectedCustomer.loyalty_entries?.length || 0} mutasi</span>
-                      </div>
-                      <div className="table-scroll">
-                        <table className="data-table customer-history-table">
-                          <thead>
-                            <tr>
-                              <th>Tanggal</th>
-                              <th>Keterangan</th>
-                              <th>Perubahan Poin</th>
-                              <th>Diproses Oleh</th>
+                  <div className="customer-history-heading">
+                    <div>
+                      <h3>Riwayat Mutasi Poin Loyalty</h3>
+                      <p>Perolehan otomatis dari transaksi lunas dan catatan penukaran poin di toko.</p>
+                    </div>
+                    <span className="count-pill">{selectedCustomer.loyalty_entries?.length || 0} mutasi</span>
+                  </div>
+                  <div className="table-scroll">
+                    <table className="data-table customer-history-table">
+                      <thead>
+                        <tr>
+                          <th>Tanggal</th>
+                          <th>Keterangan</th>
+                          <th>Perubahan Poin</th>
+                          <th>Diproses Oleh</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {selectedCustomer.loyalty_entries?.length > 0 ? (
+                          selectedCustomer.loyalty_entries.map((entry) => (
+                            <tr key={entry.id}>
+                              <td>{formatDate(entry.created_at, true)}</td>
+                              <td>{entry.description}</td>
+                              <td className="money-cell" style={{ color: entry.points_delta > 0 ? '#16a34a' : '#dc2626', fontWeight: 700 }}>
+                                {entry.points_delta > 0 ? `+${entry.points_delta}` : entry.points_delta} poin
+                              </td>
+                              <td>{entry.creator?.name || 'Sistem'}</td>
                             </tr>
-                          </thead>
-                          <tbody>
-                            {selectedCustomer.loyalty_entries?.length > 0 ? (
-                              selectedCustomer.loyalty_entries.map((entry) => (
-                                <tr key={entry.id}>
-                                  <td>{formatDate(entry.created_at, true)}</td>
-                                  <td>{entry.description}</td>
-                                  <td className="money-cell" style={{ color: entry.points_delta > 0 ? '#16a34a' : '#dc2626', fontWeight: 700 }}>
-                                    {entry.points_delta > 0 ? `+${entry.points_delta}` : entry.points_delta} poin
-                                  </td>
-                                  <td>{entry.creator?.name || 'Sistem'}</td>
-                                </tr>
-                              ))
-                            ) : (
-                              <tr><td colSpan="4" className="table-message">Belum ada mutasi poin loyalty.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  )}
+                          ))
+                        ) : (
+                          <tr><td colSpan="4" className="table-message">Belum ada mutasi poin loyalty.</td></tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
 
                   {/* RIWAYAT TRANSAKSI */}
                   <div className="customer-history-heading">

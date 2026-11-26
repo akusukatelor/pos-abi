@@ -31,4 +31,9 @@ class Customer extends Model
         // Satu pelanggan bisa memiliki banyak transaksi
         return $this->hasMany(Transaction::class);
     }
+
+    public function loyaltyEntries(): \Illuminate\Database\Eloquent\Relations\HasMany
+{
+    return $this->hasMany(LoyaltyPointTransaction::class, 'customer_id');
+}
 }

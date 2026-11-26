@@ -28,8 +28,9 @@ class CustomerAccount extends Authenticatable
         return $this->hasMany(OnlineOrder::class);
     }
 
-    public function loyaltyEntries()
-    {
-        return $this->hasMany(LoyaltyPointTransaction::class);
-    }
+    public function loyaltyEntries(): \Illuminate\Database\Eloquent\Relations\HasMany
+{
+    return $this->hasMany(LoyaltyPointTransaction::class, 'customer_id', 'customer_id');
+}
+    
 }

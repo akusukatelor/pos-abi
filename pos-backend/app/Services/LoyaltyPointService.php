@@ -16,7 +16,7 @@ class LoyaltyPointService
 
     /**
      * Berikan poin otomatis untuk transaksi yang sudah berstatus LUNAS (paid)
-     * jika pelanggan memiliki akun online aktif.
+     * bagi setiap pelanggan yang terdaftar di master customers.
      */
     public function awardForPaidTransaction(
         Transaction $transaction,
@@ -27,26 +27,22 @@ class LoyaltyPointService
             return null;
         }
 
-        $account = CustomerAccount::query()
-            ->where('customer_id', $transaction->customer_id)
-            ->where('is_active', true)
-            ->first();
-
-        if (!$account) {
-            return null;
-        }
-
         $points = (int) floor(((float) $transaction->total_price) / self::RUPIAH_PER_POINT);
         if ($points <= 0) {
             return null;
         }
+
+        $accountId = CustomerAccount::query()
+            ->where('customer_id', $transaction->customer_id)
+            ->value('id');
 
         $referenceKey = 'earn:tx:'.$transaction->id;
 
         return LoyaltyPointTransaction::query()->firstOrCreate(
             ['reference_key' => $referenceKey],
             [
-                'customer_account_id' => $account->id,
+                'customer_id' => $transaction->customer_id,
+                'customer_account_id' => $accountId,
                 'online_order_id' => $onlineOrderId,
                 'transaction_id' => $transaction->id,
                 'created_by' => $actorUserId,
@@ -57,7 +53,7 @@ class LoyaltyPointService
     }
 
     /**
-     * Tukar poin pelanggan oleh Owner.
+     * Tukar poin pelanggan oleh Owner (berlaku untuk pelanggan offline maupun online).
      *
      * @return array{entry: LoyaltyPointTransaction, replayed: bool, balance: int}
      */
@@ -71,23 +67,21 @@ class LoyaltyPointService
         $referenceKey = 'redeem:'.$idempotencyKey;
 
         return DB::transaction(function () use ($customer, $points, $rewardDescription, $actorUserId, $referenceKey): array {
-            $account = CustomerAccount::query()
-                ->where('customer_id', $customer->id)
+            $lockedCustomer = Customer::query()
+                ->whereKey($customer->id)
                 ->lockForUpdate()
-                ->first();
+                ->firstOrFail();
 
-            if (!$account) {
-                throw ValidationException::withMessages([
-                    'customer' => 'Pelanggan ini belum memiliki akun online untuk program loyalty.',
-                ]);
-            }
+            $accountId = CustomerAccount::query()
+                ->where('customer_id', $lockedCustomer->id)
+                ->value('id');
 
             $existing = LoyaltyPointTransaction::query()
                 ->where('reference_key', $referenceKey)
                 ->first();
 
             if ($existing) {
-                $balance = (int) $account->loyaltyEntries()->sum('points_delta');
+                $balance = (int) $lockedCustomer->loyaltyEntries()->sum('points_delta');
                 return [
                     'entry' => $existing,
                     'replayed' => true,
@@ -95,7 +89,7 @@ class LoyaltyPointService
                 ];
             }
 
-            $currentBalance = (int) $account->loyaltyEntries()->sum('points_delta');
+            $currentBalance = (int) $lockedCustomer->loyaltyEntries()->sum('points_delta');
 
             if ($points <= 0) {
                 throw ValidationException::withMessages([
@@ -110,7 +104,8 @@ class LoyaltyPointService
             }
 
             $entry = LoyaltyPointTransaction::create([
-                'customer_account_id' => $account->id,
+                'customer_id' => $lockedCustomer->id,
+                'customer_account_id' => $accountId,
                 'online_order_id' => null,
                 'transaction_id' => null,
                 'created_by' => $actorUserId,

@@ -17,7 +17,8 @@ class CustomerController extends Controller
     public function index()
     {
         $customers = Customer::query()
-            ->with(['account' => fn ($query) => $query->withSum('loyaltyEntries as points_balance', 'points_delta')])
+            ->with(['account'])
+            ->withSum('loyaltyEntries as points_balance', 'points_delta')
             ->latest()
             ->get();
 
@@ -117,10 +118,10 @@ class CustomerController extends Controller
             ], 409);
         }
 
-        if ($customer->transactions()->exists() || $customer->debtPayments()->exists()) {
+        if ($customer->transactions()->exists() || $customer->debtPayments()->exists() || $customer->loyaltyEntries()->exists()) {
             return response()->json([
                 'status' => 'error',
-                'message' => 'Pelanggan memiliki histori transaksi atau pembayaran, tidak dapat dihapus.',
+                'message' => 'Pelanggan memiliki histori transaksi, pembayaran, atau poin loyalitas, tidak dapat dihapus.',
             ], 409);
         }
 
@@ -339,21 +340,30 @@ class CustomerController extends Controller
     {
         $loaded = $this->withFinancialHistory($customer);
         $account = $customer->account;
+        $pointsBalance = (int) $customer->loyaltyEntries()->sum('points_delta');
         $payload = $loaded->toArray();
+
+        $payload['points_balance'] = $pointsBalance;
+        $payload['loyalty_enabled'] = true;
+        $payload['rupiah_per_point'] = LoyaltyPointService::RUPIAH_PER_POINT;
+        $payload['redeem_value_per_point'] = LoyaltyPointService::RUPIAH_VALUE_PER_POINT;
 
         $payload['online_account'] = $account ? [
             'id' => $account->id,
             'email' => $account->email,
             'is_active' => (bool) $account->is_active,
-            'points_balance' => (int) $account->loyaltyEntries()->sum('points_delta'),
+            'points_balance' => $pointsBalance,
             'loyalty_enabled' => true,
             'rupiah_per_point' => LoyaltyPointService::RUPIAH_PER_POINT,
             'redeem_value_per_point' => LoyaltyPointService::RUPIAH_VALUE_PER_POINT,
         ] : null;
 
-        $payload['loyalty_entries'] = $account
-            ? $account->loyaltyEntries()->with('creator:id,name')->latest()->limit(30)->get()->toArray()
-            : [];
+        $payload['loyalty_entries'] = $customer->loyaltyEntries()
+            ->with('creator:id,name')
+            ->latest()
+            ->limit(30)
+            ->get()
+            ->toArray();
 
         return $payload;
     }
