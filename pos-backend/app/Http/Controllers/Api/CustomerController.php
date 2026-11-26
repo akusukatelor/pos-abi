@@ -6,8 +6,9 @@ use App\Http\Controllers\Controller;
 use App\Models\Customer;
 use App\Models\CustomerDebtPayment;
 use App\Models\Transaction;
-use Illuminate\Http\Request;
+use App\Services\LoyaltyPointService;
 use Illuminate\Database\QueryException;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -15,7 +16,10 @@ class CustomerController extends Controller
 {
     public function index()
     {
-        $customers = Customer::query()->latest()->get();
+        $customers = Customer::query()
+            ->with(['account' => fn ($query) => $query->withSum('loyaltyEntries as points_balance', 'points_delta')])
+            ->latest()
+            ->get();
 
         return response()->json([
             'status' => 'success',
@@ -56,15 +60,10 @@ class CustomerController extends Controller
             ], 404);
         }
 
-        $account = $customer->account;
-        $result = $this->withFinancialHistory($customer);
-        $result['online_account'] = $account ? [
-            'email' => $account->email,
-            'points_balance' => (int) $account->loyaltyEntries()->sum('points_delta'),
-            'loyalty_enabled' => false,
-        ] : null;
-
-        return response()->json(['status' => 'success', 'data' => $result]);
+        return response()->json([
+            'status' => 'success',
+            'data' => $this->buildCustomerDetail($customer),
+        ]);
     }
 
     public function update(Request $request, $id)
@@ -133,10 +132,6 @@ class CustomerController extends Controller
         ]);
     }
 
-    /**
-     * Pelunasan tunai oleh Owner, atomik dan idempotent.
-     * Nilai piutang pada Customer wajib sama dengan seluruh sisa invoice Kasbon.
-     */
     public function payDebt(Request $request, $id)
     {
         $validated = $request->validate([
@@ -146,7 +141,6 @@ class CustomerController extends Controller
             'transaction_id' => ['nullable', 'integer', 'exists:transactions,id'],
         ]);
 
-        // Hash dari isi instruksi, bukan dari saldo berjalan (yang berubah sesudah sukses).
         $amount = number_format((float) $validated['amount'], 2, '.', '');
         $hash = hash('sha256', json_encode([
             'customer_id' => (int) $id,
@@ -157,7 +151,6 @@ class CustomerController extends Controller
 
         try {
             [$customer, $payment, $replayed] = DB::transaction(function () use ($id, $validated, $amount, $hash, $request): array {
-                // Serialisasi pembayaran untuk pelanggan yang sama.
                 $customer = Customer::query()->whereKey($id)->lockForUpdate()->first();
                 if (!$customer) {
                     throw ValidationException::withMessages([
@@ -165,8 +158,6 @@ class CustomerController extends Controller
                     ]);
                 }
 
-                // Replay harus dicek sebelum status piutang dicek.
-                // Kalau pembayaran pertama sudah lunas, retry tidak boleh ditolak.
                 $existing = CustomerDebtPayment::query()
                     ->where('idempotency_key', $validated['idempotency_key'])
                     ->first();
@@ -186,7 +177,6 @@ class CustomerController extends Controller
                     ->lockForUpdate()
                     ->get();
 
-                // Jangan kurangi saldo jika tidak bisa dialokasikan ke invoice.
                 $outstandingCents = 0;
                 foreach ($invoices as $invoice) {
                     $total = (int) round(((float) $invoice->total_price) * 100);
@@ -235,20 +225,30 @@ class CustomerController extends Controller
                     'idempotency_hash' => $hash,
                 ]);
 
+                $loyaltyService = app(LoyaltyPointService::class);
                 $toAllocate = $amountCents;
+
                 foreach ($invoices as $invoice) {
-                    if ($toAllocate === 0) break;
+                    if ($toAllocate === 0) {
+                        break;
+                    }
 
                     $total = (int) round(((float) $invoice->total_price) * 100);
                     $paid = (int) round(((float) $invoice->pay_amount) * 100);
                     $allocated = min($toAllocate, $total - $paid);
-                    if ($allocated <= 0) continue;
+                    if ($allocated <= 0) {
+                        continue;
+                    }
 
                     $invoice->pay_amount = number_format(($paid + $allocated) / 100, 2, '.', '');
                     if ($paid + $allocated === $total) {
                         $invoice->payment_status = 'paid';
                     }
                     $invoice->save();
+
+                    if ($invoice->payment_status === 'paid') {
+                        $loyaltyService->awardForPaidTransaction($invoice, $request->user()->id);
+                    }
 
                     $payment->allocations()->create([
                         'transaction_id' => $invoice->id,
@@ -269,17 +269,18 @@ class CustomerController extends Controller
                 return [$customer, $payment, false];
             }, 3);
         } catch (QueryException $exception) {
-            // Jika dua request dengan UUID sama berlomba, unique key menjamin hanya satu tercatat.
             $existing = CustomerDebtPayment::query()
-                ->where('idempotency_key', $validated['idempotency_key'])->first();
-            if (!$existing) throw $exception;
+                ->where('idempotency_key', $validated['idempotency_key'])
+                ->first();
+            if (!$existing) {
+                throw $exception;
+            }
 
             $customer = Customer::findOrFail($id);
             $payment = $existing;
             $replayed = true;
         }
 
-        // UUID yang pernah digunakan untuk payload / user yang berbeda tidak boleh direplay.
         if ($payment->user_id !== $request->user()->id
             || $payment->customer_id !== (int) $id
             || !hash_equals((string) $payment->idempotency_hash, $hash)) {
@@ -294,10 +295,67 @@ class CustomerController extends Controller
             'message' => $replayed
                 ? 'Pembayaran ini telah dicatat sebelumnya; tidak dibukukan ulang.'
                 : 'Pembayaran piutang berhasil dicatat.',
-            'data' => $this->withFinancialHistory($customer),
+            'data' => $this->buildCustomerDetail($customer),
             'payment' => $payment->load(['user:id,name', 'allocations.transaction:id,invoice_number']),
             'meta' => ['idempotent_replay' => $replayed],
         ], $replayed ? 200 : 201);
+    }
+
+    public function redeemLoyaltyPoints(Request $request, $id, LoyaltyPointService $loyaltyService)
+    {
+        $validated = $request->validate([
+            'idempotency_key' => ['required', 'string', 'uuid'],
+            'points' => ['required', 'integer', 'min:1', 'max:100000'],
+            'description' => ['required', 'string', 'min:3', 'max:200'],
+        ]);
+
+        $customer = Customer::find($id);
+        if (!$customer) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Pelanggan tidak ditemukan.',
+            ], 404);
+        }
+
+        $result = $loyaltyService->redeemPoints(
+            $customer,
+            (int) $validated['points'],
+            $validated['description'],
+            $request->user()->id,
+            $validated['idempotency_key']
+        );
+
+        return response()->json([
+            'status' => 'success',
+            'message' => $result['replayed']
+                ? 'Penukaran poin ini sudah dicatat sebelumnya.'
+                : "Penukaran {$validated['points']} poin berhasil dicatat.",
+            'data' => $this->buildCustomerDetail($customer),
+            'meta' => ['idempotent_replay' => $result['replayed']],
+        ], $result['replayed'] ? 200 : 201);
+    }
+
+    private function buildCustomerDetail(Customer $customer): array
+    {
+        $loaded = $this->withFinancialHistory($customer);
+        $account = $customer->account;
+        $payload = $loaded->toArray();
+
+        $payload['online_account'] = $account ? [
+            'id' => $account->id,
+            'email' => $account->email,
+            'is_active' => (bool) $account->is_active,
+            'points_balance' => (int) $account->loyaltyEntries()->sum('points_delta'),
+            'loyalty_enabled' => true,
+            'rupiah_per_point' => LoyaltyPointService::RUPIAH_PER_POINT,
+            'redeem_value_per_point' => LoyaltyPointService::RUPIAH_VALUE_PER_POINT,
+        ] : null;
+
+        $payload['loyalty_entries'] = $account
+            ? $account->loyaltyEntries()->with('creator:id,name')->latest()->limit(30)->get()->toArray()
+            : [];
+
+        return $payload;
     }
 
     private function withFinancialHistory(Customer $customer): Customer

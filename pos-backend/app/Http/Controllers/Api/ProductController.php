@@ -88,9 +88,18 @@ class ProductController extends Controller
             ], 422);
         }
 
+        $isOwner = $request->user()?->isOwner() ?? false;
+
+        $defaultSuggestions = $isOwner
+            ? ['Produk stok habis?', 'Rekomendasi restok', 'Tugas menunggu verifikasi', 'Ringkasan operasional']
+            : ['Produk stok habis?', 'Rekomendasi restok', 'Cek draft penerimaan'];
+
         $allProducts = Product::with(['category', 'unit'])
             ->where('is_active', true)
             ->get();
+
+        $outOfStockProducts = $allProducts->filter(fn (Product $p) => (int) $p->stock <= 0)->values();
+
         $lowStockProducts = $allProducts->map(function (Product $product) {
             $minimumStock = max((int) ($product->minimum_stock ?? 5), 0);
             $stock = (int) $product->stock;
@@ -109,49 +118,123 @@ class ProductController extends Controller
         })->filter()->values();
 
         $normalizedQuestion = strtolower(preg_replace('/[^a-z0-9]+/i', ' ', $question));
-        $normalizedQuestionWords = array_filter(preg_split('/\s+/', trim((string) $normalizedQuestion)) ?: [], fn ($word) => $word !== '');
+        $rawWords = array_filter(preg_split('/\s+/', trim((string) $normalizedQuestion)) ?: [], fn ($w) => $w !== '');
+        $stopWords = [
+            'cek', 'stok', 'harga', 'jual', 'beli', 'modal', 'berapa', 'produk', 'barang',
+            'ada', 'sisa', 'yang', 'ini', 'itu', 'dong', 'ya', 'tolong', 'lihat', 'info',
+            'apakah', 'masih', 'tersedia', 'habis', 'kosong', 'restok', 'kritis', 'menipis',
+        ];
+        $queryWords = array_values(array_diff($rawWords, $stopWords));
+
+        // 1. Cek pencarian produk spesifik berdasarkan nama atau SKU
         $matchingProduct = null;
+        if (count($queryWords) > 0) {
+            $cleanQuery = implode(' ', $queryWords);
+            foreach ($allProducts as $product) {
+                $normalizedProduct = strtolower(preg_replace('/[^a-z0-9]+/i', ' ', $product->name . ' ' . ($product->sku_code ?? '')));
+                $productWords = array_filter(preg_split('/\s+/', trim((string) $normalizedProduct)) ?: [], fn ($w) => $w !== '');
+                $sharedWords = array_values(array_intersect($queryWords, $productWords));
 
-        foreach ($allProducts as $product) {
-            $normalizedProduct = strtolower(preg_replace('/[^a-z0-9]+/i', ' ', $product->name . ' ' . ($product->sku_code ?? '')));
-            $productWords = array_filter(preg_split('/\s+/', trim((string) $normalizedProduct)) ?: [], fn ($word) => $word !== '');
-            $sharedWords = array_values(array_intersect($normalizedQuestionWords, $productWords));
-
-            if (
-                str_contains($normalizedQuestion, $normalizedProduct)
-                || str_contains($normalizedProduct, $normalizedQuestion)
-                || (count($sharedWords) > 0 && count($sharedWords) >= min(2, count($productWords)))
-            ) {
-                $matchingProduct = $product;
-                break;
+                if (
+                    (strlen($cleanQuery) >= 3 && str_contains($normalizedProduct, $cleanQuery))
+                    || (count($sharedWords) > 0 && count($sharedWords) >= min(2, count($productWords)))
+                ) {
+                    $matchingProduct = $product;
+                    break;
+                }
             }
         }
+
+        // Batasi informasi harga beli/modal hanya untuk Owner
+        $asksCost = preg_match('/\b(harga beli|harga modal|modal|hpp|margin)\b/', $normalizedQuestion) === 1;
+        if ($asksCost && !$isOwner && !str_contains($normalizedQuestion, 'verifikasi')) {
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'answer' => 'Informasi harga modal dan margin hanya dapat diakses oleh akun Owner.',
+                    'low_stock_products' => $lowStockProducts,
+                    'suggestions' => $defaultSuggestions,
+                ],
+            ], 200);
+        }
+
+        $suggestions = $defaultSuggestions;
 
         if ($matchingProduct) {
             $minimumStock = max((int) ($matchingProduct->minimum_stock ?? 5), 0);
             $stock = (int) $matchingProduct->stock;
+            $unitName = $matchingProduct->unit?->name ?? 'pcs';
+            $sellPrice = 'Rp ' . number_format((float) $matchingProduct->sell_price, 0, ',', '.');
             $difference = max($minimumStock - $stock, 0);
-            $statusText = $difference > 0
-                ? ' Saat ini masih di bawah batas minimum dengan kekurangan ' . $difference . ' pcs. Saya sarankan restok segera.'
-                : ' Masih aman dan belum perlu restok.';
 
-            $answer = 'Stok ' . $matchingProduct->name . ' saat ini ' . $stock . ' pcs. Batas minimum ' . $minimumStock . ' pcs.' . $statusText;
-        } elseif (str_contains($normalizedQuestion, 'stok') || str_contains($normalizedQuestion, 'restok') || str_contains($normalizedQuestion, 'belanja')) {
-            if ($lowStockProducts->isEmpty()) {
-                $answer = 'Semua produk saat ini masih aman dari stok kritis. Tetap pantau pembelian agar ketersediaan tetap terjaga.';
-            } else {
-                $topItems = $lowStockProducts->take(3)->map(function ($product) {
-                    return $product['name'] . ' (' . $product['stock'] . ' pcs, butuh ' . $product['recommended_quantity'] . ' pcs lagi)';
-                })->implode('; ');
+            $statusText = $stock <= 0
+                ? 'Status: STOK HABIS. Segera lakukan pembelian ke supplier.'
+                : ($difference > 0
+                    ? "Status: Stok menipis (kurang {$difference} {$unitName} dari batas minimum {$minimumStock} {$unitName})."
+                    : "Status: Aman (batas minimum {$minimumStock} {$unitName}).");
 
-                $answer = 'Saya melihat stok kritis pada: ' . $topItems . '. Prioritaskan pembelian ulang agar penjualan tidak terganggu.';
+            $priceLine = "Harga jual: {$sellPrice}";
+            if ($isOwner) {
+                $buyPrice = 'Rp ' . number_format((float) $matchingProduct->buy_price, 0, ',', '.');
+                $priceLine .= " | Harga beli: {$buyPrice}";
             }
-        } elseif (str_contains($normalizedQuestion, 'penjualan') || str_contains($normalizedQuestion, 'omzet') || str_contains($normalizedQuestion, 'jualan')) {
-            $answer = 'Saat ini ada ' . count($lowStockProducts) . ' item yang membutuhkan perhatian stok. Saya sarankan untuk fokus pada pembelian ulang sebelum stok turun lebih jauh.';
+
+            $answer = "{$matchingProduct->name} ({$matchingProduct->sku_code})\n"
+                . "• Sisa stok: {$stock} {$unitName}\n"
+                . "• {$priceLine}\n"
+                . "• {$statusText}";
+
+            $suggestions = ['Rekomendasi restok', 'Produk stok habis?', 'Ringkasan operasional'];
+        } elseif (str_contains($normalizedQuestion, 'habis') || str_contains($normalizedQuestion, 'kosong')) {
+            if ($outOfStockProducts->isEmpty()) {
+                $answer = 'Tidak ada produk dengan stok 0 saat ini. Semua katalog aktif masih memiliki stok.';
+            } else {
+                $list = $outOfStockProducts->take(6)->map(fn (Product $p) => "• {$p->name} ({$p->sku_code})")->implode("\n");
+                $extra = $outOfStockProducts->count() > 6 ? "\n...dan " . ($outOfStockProducts->count() - 6) . ' produk lainnya.' : '';
+                $answer = "Ditemukan {$outOfStockProducts->count()} produk dengan stok habis (0):\n{$list}{$extra}";
+            }
+        } elseif (str_contains($normalizedQuestion, 'verifikasi') || str_contains($normalizedQuestion, 'tugas') || str_contains($normalizedQuestion, 'opname') || str_contains($normalizedQuestion, 'draft')) {
+            $draftReceipts = \App\Models\PurchaseReceipt::query()->where('status', 'draft')->count();
+            $pendingOpnames = \App\Models\StockOpname::query()->where('status', 'pending_approval')->count();
+            $unverifiedServices = \App\Models\ServiceTransaction::query()
+                ->where('status', 'completed')
+                ->whereNull('margin_verified_by')
+                ->count();
+
+            $answer = "Status dokumen yang perlu tindak lanjut:\n"
+                . "• Penerimaan supplier (Draft): {$draftReceipts} dokumen\n"
+                . "• Stock opname (Menunggu Owner): {$pendingOpnames} dokumen\n"
+                . "• Layanan PPOB/BRILink (Belum verifikasi margin): {$unverifiedServices} transaksi";
+        } elseif (str_contains($normalizedQuestion, 'ringkasan') || str_contains($normalizedQuestion, 'operasional') || str_contains($normalizedQuestion, 'penjualan') || str_contains($normalizedQuestion, 'omzet')) {
+            $todaySalesCount = \App\Models\Transaction::query()->whereDate('created_at', today())->count();
+            $unverifiedServices = \App\Models\ServiceTransaction::query()
+                ->where('status', 'completed')
+                ->whereNull('margin_verified_by')
+                ->count();
+
+            $answer = "Ringkasan kondisi toko hari ini:\n"
+                . "• Transaksi kasir hari ini: {$todaySalesCount} transaksi\n"
+                . "• Produk stok habis: {$outOfStockProducts->count()} item\n"
+                . "• Produk di bawah minimum stok: {$lowStockProducts->count()} item\n"
+                . "• Layanan digital belum verifikasi margin: {$unverifiedServices} transaksi";
+        } elseif (str_contains($normalizedQuestion, 'stok') || str_contains($normalizedQuestion, 'restok') || str_contains($normalizedQuestion, 'belanja') || str_contains($normalizedQuestion, 'kritis')) {
+            if ($lowStockProducts->isEmpty()) {
+                $answer = 'Semua produk saat ini masih aman dari batas minimum stok.';
+            } else {
+                $topItems = $lowStockProducts->take(5)->map(function ($product) {
+                    return "• {$product['name']}: sisa {$product['stock']} (saran beli +{$product['recommended_quantity']})";
+                })->implode("\n");
+                $extra = $lowStockProducts->count() > 5 ? "\n...total {$lowStockProducts->count()} produk perlu restok." : '';
+
+                $answer = "Rekomendasi restok prioritas:\n{$topItems}{$extra}";
+            }
         } elseif (str_contains($normalizedQuestion, 'halo') || str_contains($normalizedQuestion, 'hai') || str_contains($normalizedQuestion, 'hello')) {
-            $answer = 'Halo! Saya bisa bantu cek stok, rekomendasi restok, atau ringkasan penjualan hari ini.';
+            $answer = 'Halo! Saya siap membantu mengecek sisa stok produk, rekomendasi restok, maupun dokumen yang menunggu verifikasi.';
         } else {
-            $answer = 'Saya dapat membantu mengecek stok kritis, merekomendasikan pembelian ulang, dan memberi ringkasan kondisi penjualan hari ini. Coba tanya stok produk atau kebutuhan restok.';
+            $answer = "Saya bisa membantu mengecek:\n"
+                . "• Stok & harga produk (ketik nama produk, misal: \"cek stok indomie\")\n"
+                . "• Daftar produk habis atau perlu restok\n"
+                . "• Dokumen penerimaan draft, stock opname, dan verifikasi margin layanan";
         }
 
         return response()->json([
@@ -159,6 +242,7 @@ class ProductController extends Controller
             'data' => [
                 'answer' => $answer,
                 'low_stock_products' => $lowStockProducts,
+                'suggestions' => $suggestions,
             ],
         ], 200);
     }

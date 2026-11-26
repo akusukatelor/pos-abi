@@ -37,6 +37,7 @@ export const customerApi = {
   placeOrder: (payload) => send('/customer/orders', 'POST', payload, true),
   orders: () => send('/customer/orders', 'GET', undefined, true),
   loyalty: () => send('/customer/loyalty', 'GET', undefined, true),
+  cancelOrder: (id, payload = {}) => send(`/customer/orders/${id}/cancel`, 'POST', payload, true),
 }
 
 // UUID v4 untuk retry checkout; tidak berbagi state dengan checkout POS staf.

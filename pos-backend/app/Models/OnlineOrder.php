@@ -8,7 +8,7 @@ class OnlineOrder extends Model
 {
     protected $fillable = [
         'customer_account_id', 'customer_id', 'order_number', 'status',
-        'payment_method', 'payment_status', 'total_amount', 'processed_by',
+        'payment_method', 'payment_reference', 'payment_status', 'total_amount', 'processed_by',
         'transaction_id', 'completed_at', 'cancelled_at', 'cancellation_reason',
         'idempotency_key', 'idempotency_hash',
     ];

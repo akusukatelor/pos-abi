@@ -9,6 +9,7 @@ use App\Models\Product;
 use App\Models\StockMovement;
 use App\Models\Transaction;
 use App\Models\TransactionDetail;
+use App\Services\LoyaltyPointService;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
 use Illuminate\Support\Collection;
@@ -262,6 +263,10 @@ class TransactionController extends Controller
                         'quantity' => $line['quantity'],
                         'description' => 'Penjualan '.$invoiceNumber,
                     ]);
+                }
+
+                if (!$isDebt && $customer) {
+                    app(LoyaltyPointService::class)->awardForPaidTransaction($transaction, $request->user()->id);
                 }
 
                 return $transaction->load(['details.product', 'customer', 'user', 'qrisVerifier:id,name']);

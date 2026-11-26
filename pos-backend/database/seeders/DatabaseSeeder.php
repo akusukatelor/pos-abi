@@ -98,30 +98,17 @@ class DatabaseSeeder extends Seeder
             ],
         ];
 
-        // Pastikan email Owner dan Kasir berbeda.
         if (
             filled($accounts[0]['email']) &&
             filled($accounts[1]['email']) &&
-            strcasecmp(
-                trim($accounts[0]['email']),
-                trim($accounts[1]['email'])
-            ) === 0
+            strcasecmp(trim($accounts[0]['email']), trim($accounts[1]['email'])) === 0
         ) {
-            throw new \RuntimeException(
-                'Email Owner dan Kasir harus berbeda.'
-            );
+            throw new \RuntimeException('Email Owner dan Kasir harus berbeda.');
         }
 
         foreach ($accounts as $account) {
-            if (
-                blank($account['email']) ||
-                blank($account['password'])
-            ) {
-                $this->command?->warn(
-                    "Akun {$account['label']} dilewati. "
-                    . "Periksa konfigurasi .env."
-                );
-
+            if (blank($account['email']) || blank($account['password'])) {
+                $this->command?->warn("Akun {$account['label']} dilewati. Periksa konfigurasi .env.");
                 continue;
             }
 
@@ -135,9 +122,15 @@ class DatabaseSeeder extends Seeder
                 ]
             );
 
-            $this->command?->info(
-                "Akun {$account['label']} berhasil disiapkan."
-            );
+            $this->command?->info("Akun {$account['label']} berhasil disiapkan.");
         }
+
+        // Jalankan 50 produk Warung SRC + histori transaksi 30 hari terakhir
+        $this->call([
+            SupplierSeeder::class,
+            WarungSrcDemoSeeder::class,
+            InventorySeeder::class,
+            DigitalServiceSeeder::class,
+        ]);
     }
 }

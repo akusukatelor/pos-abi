@@ -43,11 +43,14 @@ Route::get('store/catalog', [OnlineStoreController::class, 'catalog'])->middlewa
 Route::post('customer/register', [CustomerWebAuthController::class, 'register'])->middleware('throttle:5,1');
 Route::post('customer/login', [CustomerWebAuthController::class, 'login'])->middleware('throttle:5,1');
 Route::middleware(['auth:sanctum', EnsureCustomerAccount::class])->group(function (): void {
-    Route::get('customer/me', [CustomerWebAuthController::class, 'me']);
+   Route::get('customer/me', [CustomerWebAuthController::class, 'me']);
     Route::post('customer/logout', [CustomerWebAuthController::class, 'logout']);
     Route::get('customer/orders', [OnlineStoreController::class, 'myOrders']);
     Route::post('customer/orders', [OnlineStoreController::class, 'placeOrder'])->middleware('throttle:12,1');
     Route::get('customer/orders/{id}', [OnlineStoreController::class, 'showMyOrder'])->whereNumber('id');
+    Route::post('customer/orders/{id}/cancel', [OnlineStoreController::class, 'cancelMyOrder'])
+        ->whereNumber('id')
+        ->middleware('throttle:12,1');
     Route::get('customer/loyalty', [OnlineStoreController::class, 'loyalty']);
 });
 
@@ -133,10 +136,13 @@ Route::middleware(['auth:sanctum', 'active', 'role:admin,kasir'])->group(functio
 
         // P4: Owner mengelola pesanan online dan menerima pembayaran tunai saat ambil.
         Route::get('admin/online-orders', [OnlineOrderManagementController::class, 'index']);
+        Route::post('admin/online-orders/{id}/status', [OnlineOrderManagementController::class, 'updateStatus'])->whereNumber('id');
         Route::post('admin/online-orders/{id}/complete', [OnlineOrderManagementController::class, 'complete'])->whereNumber('id');
         Route::post('admin/online-orders/{id}/cancel', [OnlineOrderManagementController::class, 'cancel'])->whereNumber('id');
         Route::get('restock-settings', [RestockSettingController::class, 'index']);
-        Route::put('restock-settings/{productId}', [RestockSettingController::class, 'update'])->whereNumber('productId');
+        Route::post('restock-settings/bulk', [RestockSettingController::class, 'bulkApply']);
+        Route::match(['put', 'patch'], 'restock-settings/{productId}', [RestockSettingController::class, 'update'])
+            ->whereNumber('productId');
         Route::get('restock-recommendations', [RestockRecommendationController::class, 'index']);
 
         Route::apiResource('users', UserController::class);
@@ -165,7 +171,8 @@ Route::middleware(['auth:sanctum', 'active', 'role:admin,kasir'])->group(functio
         Route::get('customers/{customer}', [CustomerController::class, 'show'])->whereNumber('customer');
         Route::post('customers/{id}/pay-debt', [CustomerController::class, 'payDebt'])
             ->whereNumber('id');
-
+        Route::post('customers/{id}/redeem-points', [CustomerController::class, 'redeemLoyaltyPoints'])
+            ->whereNumber('id');
         // Master data pelanggan hanya boleh diubah Owner.
         Route::apiResource('customers', CustomerController::class)->except(['index', 'show']);
         Route::apiResource('expenses', ExpenseController::class);

@@ -53,6 +53,18 @@ const statusClass = (status) => ({
   insufficient_data: 'status-neutral',
 }[status] || 'status-neutral')
 
+const trendMeta = (direction) => ({
+  up: { label: '↗ Tren naik', className: 'status-warning' },
+  down: { label: '↘ Tren turun', className: 'status-neutral' },
+  stable: { label: '→ Stabil', className: 'status-success' },
+}[direction] || null)
+
+const methodLabel = (method) => ({
+  holt_double_exponential_smoothing: 'Holt Time-Series',
+  sales_velocity: 'Kecepatan penjualan',
+  manual_minimum_stock: 'Minimum manual',
+}[method] || '—')
+
 function Field({ label, children, hint, className = '' }) {
   return (
     <label className={`inventory-field ${className}`}>
@@ -64,7 +76,7 @@ function Field({ label, children, hint, className = '' }) {
 }
 
 export default function InventoryPage({ search = '', user, onToast, onNavigate }) {
-  const isOwner = user?.role === 'admin'
+  const isOwner = ['admin', 'owner'].includes(user?.role)
   const [activeTab, setActiveTab] = useState('stock')
   const [products, setProducts] = useState([])
   const [productMeta, setProductMeta] = useState(null)
@@ -79,6 +91,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
 
   const [loadingStock, setLoadingStock] = useState(true)
   const [loadingTab, setLoadingTab] = useState(false)
+  const [loadingRecommendations, setLoadingRecommendations] = useState(false)
   const [error, setError] = useState('')
   const [formError, setFormError] = useState('')
   const [statusFilter, setStatusFilter] = useState('all')
@@ -172,20 +185,25 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
 
   const loadRecommendations = useCallback(async () => {
     if (!isOwner) return
-    setLoadingTab(true)
+    setLoadingRecommendations(true)
     setError('')
     try {
-      const response = await api.get('/restock-recommendations')
+      const response = await api.get('/restock-recommendations?per_page=100')
       setRecommendations(unwrapList(response))
       setRecommendationSummary(response.summary || null)
     } catch (err) {
       setError(err.message || 'Rekomendasi restok tidak dapat dimuat.')
     } finally {
-      setLoadingTab(false)
+      setLoadingRecommendations(false)
     }
   }, [isOwner])
 
-  useEffect(() => { void Promise.resolve().then(() => loadStock(productPage)) }, [loadStock, productPage])
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadStock(productPage)
+      if (isOwner) loadRecommendations()
+    })
+  }, [loadStock, loadRecommendations, productPage, isOwner])
 
   useEffect(() => {
     void Promise.resolve().then(() => {
@@ -212,6 +230,14 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
       || (statusFilter === 'available' && stock > 0 && recommendation !== 'needs_restock')
     return matchesSearch && matchesCategory && matchesStatus
   }), [products, search, categoryFilter, statusFilter, recommendationByProduct])
+
+  const filteredRecommendations = useMemo(() => {
+    const term = search.trim().toLowerCase()
+    if (!term) return recommendations
+    return recommendations.filter((row) =>
+      `${row.product?.name || ''} ${row.product?.sku_code || ''}`.toLowerCase().includes(term)
+    )
+  }, [recommendations, search])
 
   const categories = useMemo(() => {
     const unique = new Map()
@@ -310,8 +336,8 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
   const addReceiptItem = () => {
     receiptKeyRef.current = null
     setReceiptForm((current) => ({
-    ...current,
-    items: [...current.items, { product_id: '', quantity: '1', unit_cost: '' }],
+      ...current,
+      items: [...current.items, { product_id: '', quantity: '1', unit_cost: '' }],
     }))
   }
 
@@ -340,7 +366,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
     setSaving(true)
     try {
       if (!receiptKeyRef.current) receiptKeyRef.current = makeIdempotencyKey()
-        const response = await api.post('/purchase-receipts', {
+      const response = await api.post('/purchase-receipts', {
         idempotency_key: receiptKeyRef.current,
         supplier_id: Number(receiptForm.supplier_id),
         received_at: receiptForm.received_at,
@@ -381,7 +407,12 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
         received_and_paid_confirmed: true,
       })
       setSelectedReceipt(response.data)
-      await Promise.all([loadReceipts(), loadStock(productPage), loadMovements()])
+      await Promise.all([
+        loadReceipts(),
+        loadStock(productPage),
+        loadMovements(),
+        isOwner ? loadRecommendations() : Promise.resolve(),
+      ])
       notify('success', `Penerimaan ${response.data.receipt_number} dikonfirmasi. Stok bertambah satu kali.`)
     } catch (err) {
       setFormError(err.message || 'Penerimaan tidak dapat dikonfirmasi.')
@@ -451,8 +482,8 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
   const updateOpnameItem = (index, field, value) => {
     opnameKeyRef.current = null
     setOpnameForm((current) => ({
-    ...current,
-    items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item),
+      ...current,
+      items: current.items.map((item, itemIndex) => itemIndex === index ? { ...item, [field]: value } : item),
     }))
   }
 
@@ -517,7 +548,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
     try {
       const response = await api.post(`/stock-opnames/${selectedOpname.id}/approve`, {})
       setSelectedOpname(response.data)
-      await Promise.all([loadOpnames(), loadStock(productPage), loadMovements()])
+      await Promise.all([loadOpnames(), loadStock(productPage), loadMovements(), loadRecommendations()])
       notify('success', 'Stock opname disetujui. Penyesuaian stok dan riwayatnya sudah dicatat.')
     } catch (err) {
       setFormError(err.message || 'Stock opname tidak dapat disetujui.')
@@ -546,7 +577,11 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
   }
 
   const refreshActiveTab = () => {
-    if (activeTab === 'stock') return loadStock(productPage)
+    if (activeTab === 'stock') {
+      loadStock(productPage)
+      if (isOwner) loadRecommendations()
+      return
+    }
     if (activeTab === 'receipts') return loadReceipts()
     if (activeTab === 'opname') return loadOpnames()
     if (activeTab === 'history') return loadMovements()
@@ -566,7 +601,12 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
           <p>Kelola persediaan, penerimaan barang, dan pemeriksaan stok Toko Abi.</p>
         </div>
         <div className="heading-actions inventory-heading-actions">
-          <button type="button" className="outline-button" onClick={refreshActiveTab} disabled={loadingStock || loadingTab}>
+          <button
+            type="button"
+            className="outline-button"
+            onClick={refreshActiveTab}
+            disabled={loadingStock || loadingTab || loadingRecommendations}
+          >
             <Icon name="refresh" size={15} /> Muat ulang
           </button>
           {activeTab === 'stock' && <button type="button" className="primary-button" onClick={openReceiptForm}><Icon name="plus" size={15} /> Catat penerimaan</button>}
@@ -598,8 +638,8 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
               <span className="count-pill">{filteredProducts.length} produk ditampilkan</span>
             </div>
             <div className="inventory-toolbar">
-              <label className="inventory-filter"><Icon name="filter" size={14}/><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">Semua kategori</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-              <label className="inventory-filter"><Icon name="layers" size={14}/><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">Semua kondisi</option><option value="zero">Stok kosong</option><option value="available">Tersedia</option></select></label>
+              <label className="inventory-filter"><Icon name="filter" size={14} /><select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}><option value="all">Semua kategori</option>{categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+              <label className="inventory-filter"><Icon name="layers" size={14} /><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="all">Semua kondisi</option><option value="zero">Stok kosong</option><option value="available">Tersedia</option></select></label>
             </div>
             <div className="table-scroll"><table className="data-table inventory-table">
               <thead><tr><th>Produk</th><th>SKU</th><th>Kategori</th><th>Stok tersedia</th><th>Satuan</th>{isOwner && <th>Harga beli master</th>}<th>Harga jual</th><th>Status</th>{isOwner && <th>Aksi</th>}</tr></thead>
@@ -648,7 +688,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
               </tr>) : <tr><td colSpan="8" className="table-message">Belum ada penerimaan barang.</td></tr>}
             </tbody>
           </table></div>
-          <div className="table-footnote"><Icon name="info" size={13}/>Draft tidak menambah stok. Penerimaan berstatus dikonfirmasi tercatat sebagai pembelian dibayar dan menambah stok satu kali.</div>
+          <div className="table-footnote"><Icon name="info" size={13} />Draft tidak menambah stok. Penerimaan berstatus dikonfirmasi tercatat sebagai pembelian dibayar dan menambah stok satu kali.</div>
         </section>
       )}
 
@@ -665,7 +705,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
               </tr>) : <tr><td colSpan="7" className="table-message">Belum ada dokumen stock opname.</td></tr>}
             </tbody>
           </table></div>
-          <div className="table-footnote"><Icon name="info" size={13}/>Stok tidak berubah saat hasil hitung disimpan. Penyesuaian baru dilakukan setelah Owner menyetujui hasil yang masih valid.</div>
+          <div className="table-footnote"><Icon name="info" size={13} />Stok tidak berubah saat hasil hitung disimpan. Penyesuaian baru dilakukan setelah Owner menyetujui hasil yang masih valid.</div>
         </section>
       )}
 
@@ -680,39 +720,71 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
               </tr>) : <tr><td colSpan="7" className="table-message">Belum ada pergerakan stok yang sesuai.</td></tr>}
             </tbody>
           </table></div>
-          <div className="table-footnote"><Icon name="info" size={13}/>Riwayat ditampilkan dari endpoint stock movements. Data terbaru tersedia sesuai batas halaman API.</div>
+          <div className="table-footnote"><Icon name="info" size={13} />Riwayat ditampilkan dari endpoint stock movements. Data terbaru tersedia sesuai batas halaman API.</div>
         </section>
       )}
 
       {activeTab === 'restock' && isOwner && (
         <>
-          <div className="report-note"><Icon name="info" size={16}/><span>Rekomendasi ini hanya alat bantu keputusan Owner. Sistem tidak membuat pesanan supplier, tidak mengubah stok, dan hanya menggunakan transaksi penjualan berstatus paid.</span><button type="button" className="text-button" onClick={() => onNavigate?.('settings')}>Atur parameter di Settings →</button></div>
+          <div className="report-note">
+            <Icon name="info" size={16} />
+            <span>Rekomendasi menggunakan peramalan deret waktu harian (Holt Double Exponential Smoothing) dan evaluasi fluktuasi permintaan (MAD). Sistem bersifat alat bantu keputusan dan tidak mengubah stok otomatis.</span>
+            <button type="button" className="text-button" onClick={() => onNavigate?.('settings')}>Atur parameter di Settings →</button>
+          </div>
           <div className="mini-stat-grid">
             <div className="mini-stat"><span>Produk aktif dianalisis</span><strong>{formatNumber(recommendationSummary?.active_product_count ?? 0)}</strong></div>
             <div className="mini-stat"><span>Perlu restok</span><strong className="text-danger">{formatNumber(recommendationSummary?.needs_restock_count ?? 0)}</strong></div>
+            <div className="mini-stat"><span>Tren penjualan naik</span><strong>{formatNumber(recommendationSummary?.trending_up_count ?? 0)}</strong></div>
             <div className="mini-stat"><span>Data belum cukup</span><strong>{formatNumber(recommendationSummary?.insufficient_data_count ?? 0)}</strong></div>
           </div>
           <section className="panel module-panel">
-            <div className="panel-heading inventory-panel-heading"><div><h2>Rekomendasi Pengadaan Ulang</h2><p>Dasar perhitungan dan jumlah usulan ditampilkan per produk.</p></div><span className="count-pill">{recommendations.length} produk</span></div>
+            <div className="panel-heading inventory-panel-heading"><div><h2>Rekomendasi Pengadaan Ulang</h2><p>Prediksi kebutuhan harian, tren permintaan, dan usulan jumlah pembelian per produk.</p></div><span className="count-pill">{filteredRecommendations.length} produk</span></div>
             <div className="table-scroll"><table className="data-table inventory-restock-table">
-              <thead><tr><th>Produk</th><th>Stok saat ini</th><th>Terjual</th><th>Metode</th><th>Reorder point</th><th>Usulan jumlah</th><th>Status / alasan</th></tr></thead>
+              <thead><tr><th>Produk</th><th>Stok saat ini</th><th>Terjual & tren</th><th>Prediksi / hari</th><th>Reorder point</th><th>Usulan jumlah</th><th>Status / alasan</th></tr></thead>
               <tbody>
-                {loadingTab ? <tr><td colSpan="7" className="table-message">Menghitung rekomendasi…</td></tr> : recommendations.length ? recommendations.map((row) => {
+                {loadingRecommendations ? <tr><td colSpan="7" className="table-message">Menghitung peramalan permintaan…</td></tr> : filteredRecommendations.length ? filteredRecommendations.map((row) => {
                   const rec = row.recommendation || {}
                   const unit = row.unit?.short_name || row.unit?.name || ''
+                  const trend = trendMeta(rec.trend_direction)
                   return <tr key={row.product.id}>
-                    <td><strong className="strong-cell">{row.product.name}</strong><small className="inventory-subtext">{row.product.sku_code}</small></td>
+                    <td>
+                      <strong className="strong-cell">{row.product.name}</strong>
+                      <small className="inventory-subtext">
+                        {row.product.sku_code}
+                        {row.settings?.is_default ? ' · Default toko' : ''}
+                      </small>
+                    </td>
                     <td>{formatNumber(row.current_stock)} {unit}</td>
-                    <td>{formatNumber(row.sales_basis?.units_sold || 0)} <small className="inventory-subtext">/{row.sales_basis?.period_days || '—'} hari</small></td>
-                    <td>{rec.method === 'sales_velocity' ? 'Kecepatan penjualan' : rec.method === 'manual_minimum_stock' ? 'Minimum manual' : '—'}</td>
-                    <td>{rec.reorder_point == null ? '—' : `${formatNumber(rec.reorder_point)} ${unit}`}</td>
+                    <td>
+                      <div>{formatNumber(row.sales_basis?.units_sold || 0)} <small className="inventory-subtext">/{row.sales_basis?.period_days || '—'} hari</small></div>
+                      {trend && (
+                        <small className="inventory-subtext">
+                          <span className={`status-pill ${trend.className}`} style={{ fontSize: '11px', padding: '1px 6px', marginTop: '4px', display: 'inline-block' }}>
+                            {trend.label}
+                          </span>
+                        </small>
+                      )}
+                    </td>
+                    <td>
+                      <div>{rec.forecast_daily_demand == null ? '—' : `~${formatNumber(rec.forecast_daily_demand)} ${unit}/hari`}</div>
+                      <small className="inventory-subtext">{methodLabel(rec.method)}</small>
+                    </td>
+                    <td>
+                      <div>{rec.reorder_point == null ? '—' : `${formatNumber(rec.reorder_point)} ${unit}`}</div>
+                      {rec.effective_safety_stock != null && (
+                        <small className="inventory-subtext">
+                          Safety: {formatNumber(rec.effective_safety_stock)} {unit}
+                          {rec.safety_stock_buffer > 0 ? ` (+${formatNumber(rec.safety_stock_buffer)} buffer)` : ''}
+                        </small>
+                      )}
+                    </td>
                     <td className="money-cell">{rec.suggested_order_quantity == null ? '—' : `${formatNumber(rec.suggested_order_quantity)} ${unit}`}</td>
                     <td><span className={`status-pill ${statusClass(rec.status)}`}>{statusText(rec.status)}</span><small className="inventory-subtext inventory-reason">{rec.reason || '—'}</small></td>
                   </tr>
-                }) : <tr><td colSpan="7" className="table-message">Belum ada data rekomendasi.</td></tr>}
+                }) : <tr><td colSpan="7" className="table-message">Belum ada data rekomendasi yang sesuai.</td></tr>}
               </tbody>
             </table></div>
-            <div className="table-footnote"><Icon name="info" size={13}/>Jika parameter belum lengkap atau histori belum memadai, sistem sengaja tidak menampilkan angka usulan yang seolah-olah pasti.</div>
+            <div className="table-footnote"><Icon name="info" size={13} />Prediksi harian menggunakan Holt Double Exponential Smoothing dari deret transaksi harian. Produk tanpa pengaturan khusus otomatis memakai parameter default toko.</div>
           </section>
         </>
       )}
@@ -720,10 +792,10 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
       {modal === 'price-edit' && isOwner && (
         <Modal title="Ubah Harga Beli Master" subtitle={priceForm.product_name} onClose={() => { if (!saving) setModal('') }}>
           <form className="modal-form" onSubmit={saveMasterBuyPrice}>
-            <div className="service-confirm-note"><Icon name="info" size={15}/><span>Harga master menjadi harga acuan saat produk dipilih pada penerimaan berikutnya. Harga aktual pada penerimaan yang sudah tersimpan tidak ikut berubah.</span></div>
-            <Field label="Harga beli master saat ini"><input value={formatCurrency(priceForm.current_price)} disabled readOnly/></Field>
-            <Field label="Harga beli master baru *"><input type="number" min="0" step="0.01" required value={priceForm.buy_price} onChange={(event) => setPriceForm((current) => ({ ...current, buy_price: event.target.value }))} placeholder="Masukkan harga baru"/></Field>
-            <Field label="Alasan perubahan *"><textarea rows="2" maxLength="255" required value={priceForm.reason} onChange={(event) => setPriceForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Contoh: supplier menaikkan harga pada nota terbaru"/></Field>
+            <div className="service-confirm-note"><Icon name="info" size={15} /><span>Harga master menjadi harga acuan saat produk dipilih pada penerimaan berikutnya. Harga aktual pada penerimaan yang sudah tersimpan tidak ikut berubah.</span></div>
+            <Field label="Harga beli master saat ini"><input value={formatCurrency(priceForm.current_price)} disabled readOnly /></Field>
+            <Field label="Harga beli master baru *"><input type="number" min="0" step="0.01" required value={priceForm.buy_price} onChange={(event) => setPriceForm((current) => ({ ...current, buy_price: event.target.value }))} placeholder="Masukkan harga baru" /></Field>
+            <Field label="Alasan perubahan *"><textarea rows="2" maxLength="255" required value={priceForm.reason} onChange={(event) => setPriceForm((current) => ({ ...current, reason: event.target.value }))} placeholder="Contoh: supplier menaikkan harga pada nota terbaru" /></Field>
             <div className="inventory-line-section">
               <div className="inventory-line-heading"><strong>Riwayat perubahan harga</strong><span className="count-pill">{priceHistory.length} catatan terbaru</span></div>
               {priceHistoryLoading ? <div className="table-message">Memuat riwayat harga…</div> : priceHistory.length ? (
@@ -732,7 +804,7 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
                 </tbody></table></div>
               ) : <div className="table-message">Belum ada perubahan harga master yang tercatat.</div>}
             </div>
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions"><button type="button" className="outline-button" disabled={saving} onClick={() => setModal('')}>Batal</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Menyimpan…' : 'Simpan harga master'}</button></div>
           </form>
         </Modal>
@@ -743,24 +815,24 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
           <form className="modal-form inventory-modal-form" onSubmit={createReceipt}>
             <div className="inventory-form-grid">
               <Field label="Supplier *"><select required value={receiptForm.supplier_id} onChange={(event) => updateReceiptField('supplier_id', event.target.value)}><option value="">Pilih supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.name}</option>)}</select></Field>
-              <Field label="Tanggal diterima *"><input type="date" required value={receiptForm.received_at} onChange={(event) => updateReceiptField('received_at', event.target.value)}/></Field>
-              <Field label="Nomor nota supplier"><input maxLength="100" value={receiptForm.supplier_invoice_reference} onChange={(event) => updateReceiptField('supplier_invoice_reference', event.target.value)} placeholder="Opsional"/></Field>
+              <Field label="Tanggal diterima *"><input type="date" required value={receiptForm.received_at} onChange={(event) => updateReceiptField('received_at', event.target.value)} /></Field>
+              <Field label="Nomor nota supplier"><input maxLength="100" value={receiptForm.supplier_invoice_reference} onChange={(event) => updateReceiptField('supplier_invoice_reference', event.target.value)} placeholder="Opsional" /></Field>
             </div>
-            <div className="service-confirm-note"><Icon name="info" size={15}/><span>{suppliers.length ? 'Owner dan Kasir mengisi harga aktual sesuai nota. Harga ini tidak mengubah harga beli master produk.' : (isOwner ? 'Belum ada data supplier. Tambahkan supplier terlebih dahulu.' : 'Belum ada data supplier. Minta Owner menambahkan data supplier terlebih dahulu.')}</span>{isOwner && <button type="button" className="small-action" onClick={openSupplierForm}>Tambah supplier</button>}</div>
-            <div className="service-confirm-note"><Icon name="info" size={15}/><span>Harga master otomatis menjadi nilai awal untuk Owner dan Kasir. Sesuaikan dengan nota supplier; nilai akhir hanya tersimpan pada dokumen penerimaan.</span></div>
+            <div className="service-confirm-note"><Icon name="info" size={15} /><span>{suppliers.length ? 'Owner dan Kasir mengisi harga aktual sesuai nota. Harga ini tidak mengubah harga beli master produk.' : (isOwner ? 'Belum ada data supplier. Tambahkan supplier terlebih dahulu.' : 'Belum ada data supplier. Minta Owner menambahkan data supplier terlebih dahulu.')}</span>{isOwner && <button type="button" className="small-action" onClick={openSupplierForm}>Tambah supplier</button>}</div>
+            <div className="service-confirm-note"><Icon name="info" size={15} /><span>Harga master otomatis menjadi nilai awal untuk Owner dan Kasir. Sesuaikan dengan nota supplier; nilai akhir hanya tersimpan pada dokumen penerimaan.</span></div>
             <div className="inventory-line-section">
-              <div className="inventory-line-heading"><strong>Barang yang diterima</strong><button type="button" className="small-action" onClick={addReceiptItem}><Icon name="plus" size={12}/> Tambah item</button></div>
+              <div className="inventory-line-heading"><strong>Barang yang diterima</strong><button type="button" className="small-action" onClick={addReceiptItem}><Icon name="plus" size={12} /> Tambah item</button></div>
               {receiptForm.items.map((item, index) => <div className="inventory-line-row" key={index}>
                 <Field label="Produk"><select required value={item.product_id} onChange={(event) => updateReceiptItem(index, 'product_id', event.target.value)}><option value="">Pilih produk</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.sku_code}</option>)}</select></Field>
-                <Field label="Qty diterima"><input type="number" min="1" step="1" required value={item.quantity} onChange={(event) => updateReceiptItem(index, 'quantity', event.target.value)}/></Field>
-                <Field label="Harga beli aktual / unit" hint={item.product_id ? `Harga master saat ini: ${formatCurrency(products.find((product) => String(product.id) === String(item.product_id))?.buy_price ?? 0)}. Harga nota disimpan di riwayat penerimaan.` : 'Isi sesuai harga pada nota supplier.'}><input type="number" min="0" step="0.01" required value={item.unit_cost} onChange={(event) => updateReceiptItem(index, 'unit_cost', event.target.value)} placeholder="Rp"/></Field>
-                <button type="button" className="icon-button inventory-remove-line" disabled={receiptForm.items.length === 1} onClick={() => removeReceiptItem(index)} aria-label="Hapus item"><Icon name="close" size={15}/></button>
+                <Field label="Qty diterima"><input type="number" min="1" step="1" required value={item.quantity} onChange={(event) => updateReceiptItem(index, 'quantity', event.target.value)} /></Field>
+                <Field label="Harga beli aktual / unit" hint={item.product_id ? `Harga master saat ini: ${formatCurrency(products.find((product) => String(product.id) === String(item.product_id))?.buy_price ?? 0)}. Harga nota disimpan di riwayat penerimaan.` : 'Isi sesuai harga pada nota supplier.'}><input type="number" min="0" step="0.01" required value={item.unit_cost} onChange={(event) => updateReceiptItem(index, 'unit_cost', event.target.value)} placeholder="Rp" /></Field>
+                <button type="button" className="icon-button inventory-remove-line" disabled={receiptForm.items.length === 1} onClick={() => removeReceiptItem(index)} aria-label="Hapus item"><Icon name="close" size={15} /></button>
               </div>)}
             </div>
-            <Field label="Catatan"><textarea rows="2" maxLength="1000" value={receiptForm.notes} onChange={(event) => updateReceiptField('notes', event.target.value)} placeholder="Catatan kondisi barang atau pembayaran (opsional)"/></Field>
+            <Field label="Catatan"><textarea rows="2" maxLength="1000" value={receiptForm.notes} onChange={(event) => updateReceiptField('notes', event.target.value)} placeholder="Catatan kondisi barang atau pembayaran (opsional)" /></Field>
             <div className="inventory-total-row"><span>Perkiraan total pembelian</span><strong>{formatCurrency(receiptTotal)}</strong></div>
-            <div className="service-confirm-note"><Icon name="info" size={15}/><span>Draft ini belum menambah stok. Setelah barang benar-benar diterima dan supplier sudah dibayar, lakukan konfirmasi pada detail penerimaan.</span></div>
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            <div className="service-confirm-note"><Icon name="info" size={15} /><span>Draft ini belum menambah stok. Setelah barang benar-benar diterima dan supplier sudah dibayar, lakukan konfirmasi pada detail penerimaan.</span></div>
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions"><button type="button" className="outline-button" disabled={saving} onClick={() => setModal('')}>Batal</button><button type="submit" className="primary-button" disabled={saving || !suppliers.length}>{saving ? 'Menyimpan…' : 'Simpan draft penerimaan'}</button></div>
           </form>
         </Modal>
@@ -769,11 +841,11 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
       {modal === 'supplier-create' && isOwner && (
         <Modal title="Tambah Supplier" subtitle="Data supplier baru untuk pencatatan penerimaan barang." onClose={() => { if (!saving) setModal('receipt-create') }}>
           <form className="modal-form" onSubmit={createSupplier}>
-            <Field label="Nama supplier *"><input required maxLength="255" value={supplierForm.name} onChange={(event) => setSupplierForm((current) => ({ ...current, name: event.target.value }))} placeholder="Nama toko / pemasok"/></Field>
-            <Field label="Contact person"><input maxLength="255" value={supplierForm.contact_person} onChange={(event) => setSupplierForm((current) => ({ ...current, contact_person: event.target.value }))} placeholder="Nama kontak"/></Field>
-            <Field label="Nomor telepon"><input maxLength="20" value={supplierForm.phone} onChange={(event) => setSupplierForm((current) => ({ ...current, phone: event.target.value }))} placeholder="08xx…"/></Field>
-            <Field label="Alamat"><textarea rows="2" value={supplierForm.address} onChange={(event) => setSupplierForm((current) => ({ ...current, address: event.target.value }))} placeholder="Alamat supplier"/></Field>
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            <Field label="Nama supplier *"><input required maxLength="255" value={supplierForm.name} onChange={(event) => setSupplierForm((current) => ({ ...current, name: event.target.value }))} placeholder="Nama toko / pemasok" /></Field>
+            <Field label="Contact person"><input maxLength="255" value={supplierForm.contact_person} onChange={(event) => setSupplierForm((current) => ({ ...current, contact_person: event.target.value }))} placeholder="Nama kontak" /></Field>
+            <Field label="Nomor telepon"><input maxLength="20" value={supplierForm.phone} onChange={(event) => setSupplierForm((current) => ({ ...current, phone: event.target.value }))} placeholder="08xx…" /></Field>
+            <Field label="Alamat"><textarea rows="2" value={supplierForm.address} onChange={(event) => setSupplierForm((current) => ({ ...current, address: event.target.value }))} placeholder="Alamat supplier" /></Field>
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions"><button type="button" className="outline-button" disabled={saving} onClick={() => setModal('receipt-create')}>Kembali</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Menyimpan…' : 'Simpan supplier'}</button></div>
           </form>
         </Modal>
@@ -796,11 +868,11 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
             <div className="inventory-total-row"><span>Total pembelian</span><strong>{formatCurrency(selectedReceipt.total_amount)}</strong></div>
             {selectedReceipt.notes && <div className="inventory-detail-note">Catatan: {selectedReceipt.notes}</div>}
             {selectedReceipt.status === 'draft' && <div className="inventory-confirm-box">
-              <label className="inventory-acknowledge"><input type="checkbox" checked={receiptAcknowledged} onChange={(event) => setReceiptAcknowledged(event.target.checked)}/><span>Saya memastikan seluruh barang pada dokumen ini benar-benar telah diterima dan pembayaran kepada supplier telah dilakukan.</span></label>
+              <label className="inventory-acknowledge"><input type="checkbox" checked={receiptAcknowledged} onChange={(event) => setReceiptAcknowledged(event.target.checked)} /><span>Saya memastikan seluruh barang pada dokumen ini benar-benar telah diterima dan pembayaran kepada supplier telah dilakukan.</span></label>
               <p>Konfirmasi akan menambah stok sesuai kuantitas yang diterima dan mencatat pembelian sebagai lunas. Proses tidak dapat dibatalkan.</p>
             </div>}
-            {selectedReceipt.status === 'confirmed' && <div className="service-confirm-note"><Icon name="check" size={15}/><span>Dikonfirmasi {formatDate(selectedReceipt.confirmed_at, true)} oleh {selectedReceipt.confirmer?.name || 'petugas'}. Stok sudah ditambahkan satu kali.</span></div>}
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            {selectedReceipt.status === 'confirmed' && <div className="service-confirm-note"><Icon name="check" size={15} /><span>Dikonfirmasi {formatDate(selectedReceipt.confirmed_at, true)} oleh {selectedReceipt.confirmer?.name || 'petugas'}. Stok sudah ditambahkan satu kali.</span></div>}
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions inventory-detail-actions">
               {selectedReceipt.status === 'draft' && (isOwner || Number(selectedReceipt.created_by) === Number(user?.id)) && <button type="button" className="text-button text-danger" disabled={saving} onClick={deleteDraftReceipt}>Hapus draft</button>}
               <button type="button" className="outline-button" disabled={saving} onClick={() => setModal('')}>Tutup</button>
@@ -814,24 +886,24 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
         <Modal title="Catat Stock Opname" subtitle="Masukkan hasil penghitungan fisik. Stok sistem belum berubah sampai disetujui Owner." wide onClose={() => { if (!saving) setModal('') }}>
           <form className="modal-form inventory-modal-form" onSubmit={createOpname}>
             <div className="inventory-form-grid inventory-form-grid-two">
-              <Field label="Waktu penghitungan *"><input type="datetime-local" required value={opnameForm.counted_at} onChange={(event) => updateOpnameField('counted_at', event.target.value)}/></Field>
-              <Field label="Catatan umum"><input maxLength="1000" value={opnameForm.notes} onChange={(event) => updateOpnameField('notes', event.target.value)} placeholder="Alasan umum / lokasi penghitungan"/></Field>
+              <Field label="Waktu penghitungan *"><input type="datetime-local" required value={opnameForm.counted_at} onChange={(event) => updateOpnameField('counted_at', event.target.value)} /></Field>
+              <Field label="Catatan umum"><input maxLength="1000" value={opnameForm.notes} onChange={(event) => updateOpnameField('notes', event.target.value)} placeholder="Alasan umum / lokasi penghitungan" /></Field>
             </div>
             <div className="inventory-line-section">
-              <div className="inventory-line-heading"><strong>Hasil hitung per produk</strong><button type="button" className="small-action" onClick={() => { opnameKeyRef.current = null; setOpnameForm((current) => ({ ...current, items: [...current.items, { product_id: '', physical_stock: '', notes: '' }] })) }}><Icon name="plus" size={12}/> Tambah produk</button></div>
+              <div className="inventory-line-heading"><strong>Hasil hitung per produk</strong><button type="button" className="small-action" onClick={() => { opnameKeyRef.current = null; setOpnameForm((current) => ({ ...current, items: [...current.items, { product_id: '', physical_stock: '', notes: '' }] })) }}><Icon name="plus" size={12} /> Tambah produk</button></div>
               {opnameForm.items.map((item, index) => {
                 const product = products.find((row) => String(row.id) === String(item.product_id))
                 const difference = product && item.physical_stock !== '' ? Number(item.physical_stock) - Number(product.stock) : null
                 return <div className="inventory-opname-row" key={index}>
                   <Field label="Produk"><select value={item.product_id} onChange={(event) => updateOpnameItem(index, 'product_id', event.target.value)}><option value="">Pilih produk</option>{products.map((row) => <option key={row.id} value={row.id}>{row.name} · stok sistem {formatNumber(row.stock)}</option>)}</select></Field>
-                  <div className="inventory-opname-count"><Field label="Stok fisik"><input type="number" min="0" step="1" value={item.physical_stock} onChange={(event) => updateOpnameItem(index, 'physical_stock', event.target.value)} placeholder="Jumlah hasil hitung"/></Field>{product && <small>Stok sistem: {formatNumber(product.stock)} {product.unit?.short_name || product.unit?.name || ''}<br/>Selisih: <strong className={difference === null || difference === 0 ? '' : difference > 0 ? 'text-success' : 'text-danger'}>{difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatNumber(difference)}`}</strong></small>}</div>
-                  <Field label="Alasan selisih (opsional)"><input maxLength="255" value={item.notes} onChange={(event) => updateOpnameItem(index, 'notes', event.target.value)} placeholder="Wajib jika ada selisih tanpa catatan umum"/></Field>
-                  <button type="button" className="icon-button inventory-remove-line" disabled={opnameForm.items.length === 1} onClick={() => { opnameKeyRef.current = null; setOpnameForm((current) => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) })) }} aria-label="Hapus produk"><Icon name="close" size={15}/></button>
+                  <div className="inventory-opname-count"><Field label="Stok fisik"><input type="number" min="0" step="1" value={item.physical_stock} onChange={(event) => updateOpnameItem(index, 'physical_stock', event.target.value)} placeholder="Jumlah hasil hitung" /></Field>{product && <small>Stok sistem: {formatNumber(product.stock)} {product.unit?.short_name || product.unit?.name || ''}<br />Selisih: <strong className={difference === null || difference === 0 ? '' : difference > 0 ? 'text-success' : 'text-danger'}>{difference === null ? '—' : `${difference > 0 ? '+' : ''}${formatNumber(difference)}`}</strong></small>}</div>
+                  <Field label="Alasan selisih (opsional)"><input maxLength="255" value={item.notes} onChange={(event) => updateOpnameItem(index, 'notes', event.target.value)} placeholder="Wajib jika ada selisih tanpa catatan umum" /></Field>
+                  <button type="button" className="icon-button inventory-remove-line" disabled={opnameForm.items.length === 1} onClick={() => { opnameKeyRef.current = null; setOpnameForm((current) => ({ ...current, items: current.items.filter((_, itemIndex) => itemIndex !== index) })) }} aria-label="Hapus produk"><Icon name="close" size={15} /></button>
                 </div>
               })}
             </div>
-            <div className="service-confirm-note"><Icon name="info" size={15}/><span>Kasir boleh mencatat hasil hitung, tetapi tidak dapat menyetujui penyesuaian. Jika stok berubah setelah penghitungan, backend akan menolak persetujuan agar koreksi tidak memakai data kedaluwarsa.</span></div>
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            <div className="service-confirm-note"><Icon name="info" size={15} /><span>Kasir boleh mencatat hasil hitung, tetapi tidak dapat menyetujui penyesuaian. Jika stok berubah setelah penghitungan, backend akan menolak persetujuan agar koreksi tidak memakai data kedaluwarsa.</span></div>
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions"><button type="button" className="outline-button" disabled={saving} onClick={() => setModal('')}>Batal</button><button type="submit" className="primary-button" disabled={saving}>{saving ? 'Menyimpan…' : 'Simpan hasil hitung'}</button></div>
           </form>
         </Modal>
@@ -853,9 +925,9 @@ export default function InventoryPage({ search = '', user, onToast, onNavigate }
             {selectedOpname.status === 'rejected' && <div className="form-error">Alasan penolakan: {selectedOpname.rejection_reason || '—'}</div>}
             {selectedOpname.status === 'pending_approval' && isOwner && <div className="inventory-confirm-box">
               <p>Periksa kembali selisih fisik. Persetujuan akan menyamakan stok sistem dengan jumlah fisik dan mencatat stock movement untuk setiap selisih.</p>
-              <Field label="Alasan penolakan (isi hanya jika akan menolak)"><textarea rows="2" maxLength="1000" value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Jelaskan alasan penolakan…"/></Field>
+              <Field label="Alasan penolakan (isi hanya jika akan menolak)"><textarea rows="2" maxLength="1000" value={rejectionReason} onChange={(event) => setRejectionReason(event.target.value)} placeholder="Jelaskan alasan penolakan…" /></Field>
             </div>}
-            {formError && <div className="form-error"><Icon name="warning" size={14}/>{formError}</div>}
+            {formError && <div className="form-error"><Icon name="warning" size={14} />{formError}</div>}
             <div className="modal-actions inventory-detail-actions">
               <button type="button" className="outline-button" disabled={saving} onClick={() => setModal('')}>Tutup</button>
               {selectedOpname.status === 'pending_approval' && isOwner && <>

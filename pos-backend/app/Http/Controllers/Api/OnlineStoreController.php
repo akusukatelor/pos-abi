@@ -7,7 +7,6 @@ use App\Models\OnlineOrder;
 use App\Models\Product;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
@@ -47,16 +46,35 @@ class OnlineStoreController extends Controller
     {
         $data = $request->validate([
             'idempotency_key' => ['required', 'uuid'],
+            'payment_method' => ['nullable', 'in:cash_on_pickup,qris_gopay'],
+            'payment_reference' => ['nullable', 'string', 'max:100'],
+            'qris_confirmed' => ['nullable', 'boolean'],
             'items' => ['required', 'array', 'min:1', 'max:30'],
             'items.*.product_id' => ['required', 'integer', 'distinct', 'exists:products,id'],
             'items.*.quantity' => ['required', 'integer', 'min:1', 'max:20'],
         ]);
 
+        $paymentMethod = $data['payment_method'] ?? 'cash_on_pickup';
+        $paymentReference = $paymentMethod === 'qris_gopay'
+            ? (trim((string) ($data['payment_reference'] ?? '')) ?: null)
+            : null;
+
+        if ($paymentMethod === 'qris_gopay' && !$request->boolean('qris_confirmed')) {
+            throw ValidationException::withMessages([
+                'qris_confirmed' => 'Centang konfirmasi bahwa Anda telah melakukan pembayaran QRIS.',
+            ]);
+        }
+
         $items = collect($data['items'])->map(fn (array $item): array => [
             'product_id' => (int) $item['product_id'],
             'quantity' => (int) $item['quantity'],
         ])->sortBy('product_id')->values();
-        $hash = hash('sha256', json_encode($items->all(), JSON_THROW_ON_ERROR));
+
+        $hash = hash('sha256', json_encode([
+            'payment_method' => $paymentMethod,
+            'items' => $items->all(),
+        ], JSON_THROW_ON_ERROR));
+
         $account = $request->user();
 
         $existing = OnlineOrder::with('items')->where('idempotency_key', $data['idempotency_key'])->first();
@@ -65,7 +83,7 @@ class OnlineStoreController extends Controller
         }
 
         try {
-            $order = DB::transaction(function () use ($account, $items, $hash, $data): OnlineOrder {
+            $order = DB::transaction(function () use ($account, $items, $hash, $data, $paymentMethod, $paymentReference): OnlineOrder {
                 $totalCents = 0;
                 $lines = [];
                 foreach ($items as $item) {
@@ -93,7 +111,8 @@ class OnlineStoreController extends Controller
                     'customer_id' => $account->customer_id,
                     'order_number' => 'ON-'.now()->format('YmdHis').'-'.Str::upper(Str::random(8)),
                     'status' => 'pending',
-                    'payment_method' => 'cash_on_pickup',
+                    'payment_method' => $paymentMethod,
+                    'payment_reference' => $paymentReference,
                     'payment_status' => 'unpaid',
                     'total_amount' => number_format($totalCents / 100, 2, '.', ''),
                     'idempotency_key' => $data['idempotency_key'],
@@ -105,7 +124,9 @@ class OnlineStoreController extends Controller
 
             return response()->json([
                 'status' => 'success',
-                'message' => 'Pesanan diterima. Bayar tunai ketika mengambil barang di toko.',
+                'message' => $paymentMethod === 'qris_gopay'
+                    ? 'Pesanan QRIS diterima. Pembayaran akan diverifikasi petugas saat pesanan diproses.'
+                    : 'Pesanan diterima. Bayar tunai ketika mengambil barang di toko.',
                 'data' => $order,
                 'meta' => ['idempotent_replay' => false],
             ], 201);
@@ -141,14 +162,67 @@ class OnlineStoreController extends Controller
         $entries = $account->loyaltyEntries()->latest()->limit(50)->get([
             'id', 'points_delta', 'description', 'created_at',
         ]);
+
         return response()->json([
             'status' => 'success',
             'data' => [
-                'enabled' => false,
+                'enabled' => true,
                 'points_balance' => (int) $account->loyaltyEntries()->sum('points_delta'),
+                'rupiah_per_point' => 10000,
+                'redeem_value_per_point' => 1000,
+                'rewards' => [
+                    ['points' => 5, 'title' => 'Voucher Belanja Rp 5.000', 'value' => 5000],
+                    ['points' => 10, 'title' => 'Paket Mie Instan / Kopi (Senilai Rp 10.000)', 'value' => 10000],
+                    ['points' => 25, 'title' => 'Voucher Sembako Rp 25.000', 'value' => 25000],
+                    ['points' => 50, 'title' => 'Paket Sembako Hemat (Senilai Rp 50.000)', 'value' => 50000],
+                ],
                 'entries' => $entries,
-                'message' => 'Aturan perolehan dan penukaran poin menunggu persetujuan toko.',
+                'message' => 'Setiap belanja lunas kelipatan Rp 10.000 mendapatkan 1 poin. Tukarkan poin langsung di kasir toko.',
             ],
+        ]);
+    }
+
+    public function cancelMyOrder(Request $request, int $id)
+    {
+        $data = $request->validate([
+            'reason' => ['nullable', 'string', 'max:450'],
+        ]);
+
+        $accountId = $request->user()->id;
+        $customReason = trim((string) ($data['reason'] ?? ''));
+        $reason = $customReason !== ''
+            ? 'Dibatalkan pelanggan: '.$customReason
+            : 'Dibatalkan oleh pelanggan.';
+
+        $order = DB::transaction(function () use ($accountId, $id, $reason): OnlineOrder {
+            $order = OnlineOrder::query()
+                ->where('customer_account_id', $accountId)
+                ->lockForUpdate()
+                ->findOrFail($id);
+
+            if ($order->status === 'cancelled') {
+                return $order;
+            }
+
+            if ($order->status !== 'pending') {
+                throw ValidationException::withMessages([
+                    'order' => 'Pesanan tidak dapat dibatalkan karena sudah diproses atau diselesaikan oleh toko.',
+                ]);
+            }
+
+            $order->update([
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+                'cancellation_reason' => Str::limit($reason, 500, ''),
+            ]);
+
+            return $order;
+        }, 3);
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Pesanan berhasil dibatalkan.',
+            'data' => $order->load('items'),
         ]);
     }
 

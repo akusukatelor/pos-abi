@@ -5,7 +5,7 @@ import './PublicHelpPage.css'
 const initialMessages = [{
   id: 'welcome',
   role: 'bot',
-  text: 'Halo! Selamat datang di Bantuan Pelanggan LARIS - ABICELL. Saya bisa membantu menjawab pertanyaan umum berdasarkan informasi yang tersedia. Silakan pilih topik atau ketik pertanyaan.',
+  text: 'Halo! Selamat datang di Bantuan Pelanggan LARIS - ABICELL. Pilih topik di bawah atau ketik nama produk untuk mengecek ketersediaan dan harga jualnya.',
 }]
 
 export default function PublicHelpPage() {
@@ -89,15 +89,15 @@ export default function PublicHelpPage() {
         <section className="public-help-intro">
           <div className="public-help-eyebrow"><span className="public-help-live-dot" /> Pusat informasi pelanggan</div>
           <h1>Ada yang ingin<br /><span>ditanyakan?</span></h1>
-          <p>Temukan informasi umum tentang belanja, pembayaran, dan layanan toko melalui asisten berbasis FAQ.</p>
+          <p>Temukan informasi umum tentang belanja online, metode pembayaran, layanan PPOB/BRILink, serta ketersediaan produk toko.</p>
           <div className="public-help-highlights">
             <div><span aria-hidden="true">✓</span> Tidak perlu login</div>
-            <div><span aria-hidden="true">✓</span> Jawaban berbasis informasi toko</div>
+            <div><span aria-hidden="true">✓</span> Cek katalog & harga jual</div>
             <div><span aria-hidden="true">✓</span> Tanpa akses data pribadi</div>
           </div>
           <div className="public-help-scope-note">
             <strong>Informasi penting</strong>
-            <p>Halaman ini khusus FAQ. Pesanan online tersedia melalui halaman toko, dengan pembayaran tunai saat pengambilan. Chatbot tidak memproses pesanan atau pembayaran.</p>
+            <p>Halaman ini khusus bantuan informasi & FAQ. Pemesanan produk dilakukan melalui halaman Toko Online dengan pembayaran tunai maupun QRIS GoPay.</p>
           </div>
         </section>
 
@@ -106,19 +106,26 @@ export default function PublicHelpPage() {
             <div className="public-help-agent-icon" aria-hidden="true">✦</div>
             <div className="public-help-chat-heading">
               <strong>Asisten Informasi Toko</strong>
-              <span>Rule-based FAQ · LARIS - ABICELL</span>
+              <span>FAQ & Katalog Publik · LARIS - ABICELL</span>
             </div>
-            <span className="public-help-chat-badge">Informasi</span>
+            <button
+              type="button"
+              className="public-help-chat-badge"
+              style={{ cursor: 'pointer', border: 'none' }}
+              onClick={() => setMessages(initialMessages)}
+            >
+              Reset chat
+            </button>
           </div>
 
           <div className="public-help-messages" role="log" aria-live="polite" aria-relevant="additions text">
             {messages.map((message) => (
               <div key={message.id} className={`public-help-bubble-row ${message.role === 'user' ? 'public-help-bubble-user' : 'public-help-bubble-bot'}`}>
                 {message.role === 'bot' && <span className="public-help-bubble-avatar" aria-hidden="true">✦</span>}
-                <div className="public-help-bubble">{message.text}</div>
+                <div className="public-help-bubble" style={{ whiteSpace: 'pre-line' }}>{message.text}</div>
               </div>
             ))}
-            {loading && <div className="public-help-typing" role="status">Mencari jawaban dari FAQ…</div>}
+            {loading && <div className="public-help-typing" role="status">Mencari informasi…</div>}
             <div ref={bottomRef} />
           </div>
 
@@ -147,14 +154,14 @@ export default function PublicHelpPage() {
                 onChange={(event) => setQuestion(event.target.value)}
                 maxLength={300}
                 disabled={loading}
-                placeholder="Tulis pertanyaan tentang toko…"
+                placeholder="Tanya topik FAQ atau nama produk (misal: harga beras)…"
                 autoComplete="off"
               />
               <button type="submit" disabled={loading || !question.trim()} aria-label="Kirim pertanyaan">
                 <span>Kirim</span> <span aria-hidden="true">→</span>
               </button>
             </form>
-            <p className="public-help-footnote">Jawaban terbatas pada FAQ yang tersedia. Untuk informasi spesifik, hubungi petugas toko.</p>
+            <p className="public-help-footnote">Jawaban terbatas pada informasi publik toko. Data pribadi dan stok internal tetap terlindungi.</p>
           </div>
         </section>
       </main>

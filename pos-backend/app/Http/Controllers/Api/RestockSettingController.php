@@ -15,6 +15,7 @@ class RestockSettingController extends Controller
     {
         $validated = $request->validate([
             'search' => ['nullable', 'string', 'max:100'],
+            'per_page' => ['nullable', 'integer', 'between:1,100'],
         ]);
 
         $query = Product::query()
@@ -32,7 +33,7 @@ class RestockSettingController extends Controller
 
         return response()->json([
             'status' => 'success',
-            'data' => $query->paginate(50),
+            'data' => $query->paginate((int) ($validated['per_page'] ?? 50)),
         ]);
     }
 
@@ -89,6 +90,51 @@ class RestockSettingController extends Controller
             'status' => 'success',
             'message' => 'Parameter rekomendasi restok berhasil disimpan.',
             'data' => $product->load(['unit:id,name,short_name', 'restockSetting']),
+        ]);
+    }
+
+    public function bulkApply(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'sales_period_days' => ['required', 'integer', 'between:1,365'],
+            'lead_time_days' => ['required', 'integer', 'between:0,365'],
+            'safety_stock' => ['required', 'integer', 'between:0,1000000'],
+            'review_interval_days' => ['required', 'integer', 'between:1,365'],
+            'overwrite_existing' => ['nullable', 'boolean'],
+        ]);
+
+        $query = Product::query()->where('is_active', true);
+        if (empty($validated['overwrite_existing'])) {
+            $query->whereDoesntHave('restockSetting');
+        }
+
+        $productIds = $query->pluck('id');
+        $now = now();
+        $userId = $request->user()->id;
+
+        $records = $productIds->map(fn (int $productId): array => [
+            'product_id' => $productId,
+            'sales_period_days' => $validated['sales_period_days'],
+            'lead_time_days' => $validated['lead_time_days'],
+            'safety_stock' => $validated['safety_stock'],
+            'review_interval_days' => $validated['review_interval_days'],
+            'created_by' => $userId,
+            'updated_by' => $userId,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ])->all();
+
+        if (!empty($records)) {
+            ProductRestockSetting::query()->upsert(
+                $records,
+                ['product_id'],
+                ['sales_period_days', 'lead_time_days', 'safety_stock', 'review_interval_days', 'updated_by', 'updated_at'],
+            );
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Parameter berhasil diterapkan ke {$productIds->count()} produk.",
         ]);
     }
 }
